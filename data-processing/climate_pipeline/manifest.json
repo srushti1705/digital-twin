@@ -1,0 +1,63 @@
+
+{
+  "project": "Climate Digital Twin",
+  "source": "India Meteorological Department (IMD)",
+  "period": {
+    "start": "2015-01-01",
+    "end": "2025-12-31",
+    "daily_records": 4018
+  },
+  "spatial_subsets": {
+    "rainfall": {
+      "name": "Maharashtra bounding box",
+      "latitude_range": [15.5, 22.1],
+      "longitude_range": [72.6, 80.9],
+      "grid_shape": [27, 33],
+      "resolution": "0.25 degree"
+    },
+    "temperature": {
+      "name": "Maharashtra bounding box",
+      "latitude_range": [15.5, 21.5],
+      "longitude_range": [73.5, 80.5],
+      "grid_shape": [7, 8],
+      "resolution": "1 degree"
+    }
+  },
+  "missing_value_handling": {
+    "rainfall": {
+      "replacement": "NaN",
+      "imputation": false,
+      "valid_mask": true
+    },
+    "temperature": {
+      "source_marker": 99.9,
+      "replacement": "NaN",
+      "imputation": false
+    }
+  },
+  "outputs": [
+    {
+      "variable": "rainfall_mm",
+      "file": "data/processed/rainfall_mm_2015_2025_maharashtra.nc",
+      "units": "mm",
+      "resolution": "0.25 degree"
+    },
+    {
+      "variable": "tmax_c",
+      "file": "data/processed/tmax_c_2015_2025.nc",
+      "units": "degrees_Celsius"
+    },
+    {
+      "variable": "tmin_c",
+      "file": "data/processed/tmin_c_2015_2025.nc",
+      "units": "degrees_Celsius"
+    }
+  ],
+  "validation": {
+    "rainfall_dates_checked": true,
+    "rainfall_values_and_missingness_verified_for_2015_2025": true,
+    "rainfall_negative_values_checked": true,
+    "temperature_dimensions_and_dates_checked": true,
+    "temperature_missing_value_mask_checked_for_all_years": true
+  }
+}

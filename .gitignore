@@ -26,3 +26,14 @@ data/processed/
 
 # Editors
 .vscode/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Processed climate data
+data/processed/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
