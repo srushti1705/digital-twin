@@ -1,39 +1,130 @@
+# ==========================================
+# AI-Powered Digital Twin of India's Climate
+# Git Ignore Configuration
+# ==========================================
 
-# Python
+# --- Virtual Environments ---
+venv/
 .venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Python & Bytecode ---
 __pycache__/
+*.py[cod]
 *.pyc
+*$py.class
+*.so
 .pytest_cache/
-
-# Node
-node_modules/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+build/
+devel/
 dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Secrets
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# --- IDEs & Editors ---
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# --- Environment Variables & Secrets ---
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.crt
 
-# Climate data and generated models
-data/raw/
-data/processed/
+# --- Node.js & Frontend ---
+node_modules/
+dist/
+.next/
+out/
+.npm/
+.yarn/
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# --- Climate Datasets & Binary Data Files ---
+# Ignore raw & processed dataset contents while keeping folder structures via .gitkeep
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/**/README.md
+data/processed/*
+!data/processed/.gitkeep
+!data/processed/**/README.md
+data/external/*
+!data/external/.gitkeep
+!data/external/**/README.md
+!data/external/geospatial/
+!data/external/geospatial/**
+
+# Climate & Geospatial dataset extensions
 *.nc
 *.nc4
+*.grd
 *.grib
+*.grib2
 *.grb
+*.hdf
+*.hdf5
+*.h5
+*.tif
+*.tiff
+*.bin
+*.dat
+*.csv
+*.parquet
+*.feather
+*.tar
+*.gz
+*.zip
+*.7z
+
+# --- Trained Machine Learning Models ---
+models/*
+!models/.gitkeep
+*.pth
+*.pt
+*.onnx
 *.pkl
 *.joblib
+*.pb
+*.ckpt
 
-# Editors
-.vscode/
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-
-# Processed climate data
-data/processed/
-# Python
-__pycache__/
-*.py[cod]
-.venv/
+# --- Outputs & Execution Logs ---
+outputs/*
+!outputs/.gitkeep
+logs/
+*.log
