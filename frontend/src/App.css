@@ -541,6 +541,25 @@ button {
   display: grid;
 }
 
+.unavailable-climate-item {
+  display: grid;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.unavailable-climate-reference {
+  width: fit-content;
+  margin-left: 25px;
+  color: rgba(170, 221, 231, 0.75);
+  font-size: 9px;
+  text-decoration: none;
+}
+
+.unavailable-climate-reference:hover {
+  color: #b7eef5;
+  text-decoration: underline;
+}
+
 .rainfall-layer-options {
   display: grid;
   gap: 2px;
@@ -594,7 +613,6 @@ button {
   min-height: 39px;
   padding: 5px 0;
   border: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
   color: rgba(255, 255, 255, 0.48);
   text-align: left;

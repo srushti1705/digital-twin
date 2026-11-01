@@ -35,9 +35,9 @@ An AI-driven digital twin bridges these gaps by combining multidimensional geosp
 ## 4. Initial Proof of Concept (POC)
 
 The initial proof-of-concept focuses on core high-impact variables:
-- **Spatial Coverage**: Indian Subcontinent Bounding Box ($6.5^\circ\text{N}$ to $38.5^\circ\text{N}$, $68.5^\circ\text{E}$ to $97.5^\circ\text{E}$).
-- **Spatial Resolution**: Standard IMD $0.25^\circ \times 0.25^\circ$ gridded resolution.
-- **Temporal Scale**: Daily timestep observations and historical data cubes.
+- **Rainfall coverage**: the installed IMD grid spans $6.5^\circ\text{N}$ to $38.5^\circ\text{N}$ and $66.5^\circ\text{E}$ to $100^\circ\text{E}$ at native $0.25^\circ$ resolution.
+- **Temperature coverage**: the installed IMD Tmax/Tmin grids span $7.5^\circ\text{N}$ to $37.5^\circ\text{N}$ and $67.5^\circ\text{E}$ to $97.5^\circ\text{E}$ at native $1^\circ$ resolution.
+- **Temporal scale**: the currently installed local observations cover 2025 daily; the products are not a live feed.
 
 ---
 
@@ -65,70 +65,80 @@ The initial proof-of-concept focuses on core high-impact variables:
 
 ## 7. Technology Stack
 
-- **Core Language**: Python 3.10+
-- **Multidimensional Grid Processing**: `xarray`, `netCDF4`, `numpy`, `pandas`, `scipy`
-- **Geospatial & Visualization Utilities**: `geopandas`, `rioxarray`, `matplotlib`, `seaborn`
-- **Machine Learning & Modeling (Future)**: `scikit-learn`, `PyTorch` / `TensorFlow`
-- **Backend API (Future)**: FastAPI / Python REST services
-- **Interactive Dashboard (Future)**: Next.js / React / Deck.gl / Streamlit GIS UI
+- **Backend and data processing**: Python, FastAPI, NumPy, xarray, and the IMD native-grid readers.
+- **Forecast baselines**: scikit-learn metrics and XGBoost, compared with same-cell persistence.
+- **Frontend**: React, TypeScript, Vite, CesiumJS, and Resium.
+- **Data formats**: official IMD little-endian float32 `.grd`; optional NetCDF rainfall support in the backend loader.
 
 ---
 
 ## 8. Project Architecture
 
-```
-                               ┌────────────────────────┐
-                               │   National Datasets    │
-                               │  (IMD, INSAT, ERA5)    │
-                               └───────────┬────────────┘
-                                           │
-                                           ▼
-                               ┌────────────────────────┐
-                               │ src/data & src/preproc │
-                               │  (Ingestion & Alignment)│
-                               └───────────┬────────────┘
-                                           │
-                                           ▼
-                               ┌────────────────────────┐
-                               │ data/processed (xarray)│
-                               │  (Aligned Data Cubes)  │
-                               └───────────┬────────────┘
-                                           │
-                        ┌──────────────────┴──────────────────┐
-                        ▼                                     ▼
-            ┌──────────────────────┐              ┌──────────────────────┐
-            │     src/models       │              │    src/simulation    │
-            │ (AI Short-Term ML)   │              │ (Assimilation/What-if)│
-            └───────────┬──────────┘              └───────────┬──────────┘
-                        │                                     │
-                        └──────────────────┬──────────────────┘
-                                           │
-                                           ▼
-                               ┌────────────────────────┐
-                               │   backend/ & frontend/ │
-                               │ (API & Interactive UI) │
-                               └────────────────────────┘
+```text
+IMD annual rainfall / Tmax / Tmin GRD files
+  -> backend native-grid readers
+  -> FastAPI observation routes
+  -> frontend climate API service
+  -> Cesium imagery overlays and grid-cell inspection
+
+IMD annual GRD files
+  -> chronological one-day model training and evaluation
+  -> local ignored model artifacts and evaluation JSON
+  -> FastAPI prediction routes
+  -> frontend forecast raster and click inspection
+
+NASA GIBS IMERG imagery -> Cesium WMS overlay (visualization only; no numeric query)
+
+INSAT/MOSDAC georeferenced cloud feed and structured RSMC cyclone feed
+  -> not currently connected
 ```
 
 ---
 
-## 9. Development Phases
+## 9. Current Verified Implementation
 
-| Phase | Description | Status |
-| :--- | :--- | :--- |
-| **Phase 1** | Project Setup & Preparation for Climate Dataset Processing | 🔄 **In Progress (Active)** |
-| **Phase 2** | IMD Dataset Ingestion, Grid Alignment & Preprocessing | ⏳ Pending |
-| **Phase 3** | INSAT Satellite & ERA5 Reanalysis Integration | ⏳ Pending |
-| **Phase 4** | AI/ML Short-Term Prediction Engine Development | ⏳ Pending |
-| **Phase 5** | Data Assimilation & State Monitoring Pipeline | ⏳ Pending |
-| **Phase 6** | What-If Scenario Simulation Engine & Interactive UI Dashboard | ⏳ Pending |
+- React, TypeScript, Vite, CesiumJS, and Resium provide an interactive India-focused globe.
+- FastAPI serves date-addressable IMD rainfall grids at native 0.25° and Tmax/Tmin grids at native 1° resolution. All three are backed by locally installed 2025 IMD files, which are excluded from Git.
+- A reproducible download script retrieves selected annual IMD rainfall and temperature files from official IMD Pune forms and checks their expected binary sizes.
+- One-day model forecasts use a reproducible chronological training and evaluation workflow over the locally available native grids. XGBoost candidates are compared with a persistence baseline and selected only when validation RMSE improves by at least 1% without more than 1% validation MAE degradation. Held-out metrics are saved locally and exposed through the prediction API. Single-year results are preliminary, not operational or current-weather forecasts.
+- NASA GPM IMERG is currently available only as NASA GIBS precipitation imagery. Numerical IMERG retrieval requires server-side Earthdata access and is not verified.
+- No georeferenced cloud-imagery feed or structured official cyclone track feed is connected. These layers remain unavailable rather than showing fabricated data.
 
----
+## 10. Run Locally
 
-## 10. Current Phase Status
+From the repository root, create the Python environment, install the declared
+project and API dependencies, download the official 2025 IMD rainfall/Tmax/Tmin
+grids, and train the one-day models:
 
-> [!IMPORTANT]
-> **Phase 1 (Current Focus)** strictly covers project architecture initialization, Python virtual environment setup (`venv`), package installation (`xarray`, `netCDF4`, `pandas`, `numpy`, `scikit-learn`, `matplotlib`, `seaborn`), directory layout creation, `.gitignore` rules, and dataset ingestion preparation.
+```powershell
+python -m venv backend\.venv
+backend\.venv\Scripts\python.exe -m pip install -r requirements.txt -r backend\requirements.txt
+python scripts\download_imd_grids.py --years 2025
+Set-Location backend
+.\.venv\Scripts\python.exe train_climate_models.py
+.\.venv\Scripts\python.exe -m uvicorn main:app --reload
+```
 
-> [!NOTE]
-> Satellite data integration, AI prediction models, real-time digital twin state monitoring, API backends, interactive dashboards, and what-if scenario simulations **have NOT been implemented yet** and are scheduled for subsequent development phases.
+In another terminal, from the repository root:
+
+```powershell
+Set-Location frontend
+npm ci
+npm run dev
+```
+
+The frontend defaults to the API at `http://localhost:8000`. Downloaded raw data is
+git-ignored under `data/raw/`; trained joblib artifacts and evaluation JSON are
+git-ignored under `models/climate_forecasts/` and `outputs/climate_forecasts/`.
+They must be downloaded and generated locally and are intentionally not committed.
+
+Run the complete backend test suite from the repository root with:
+
+```powershell
+backend\.venv\Scripts\python.exe -m pytest tests -q
+```
+
+See `data/DATA_SOURCES.md`, `backend/RAINFALL_API.md`, and
+`backend/FORECAST_MODEL_REPORT.md` for source details, API routes, and measured
+model results. Numerical NASA IMERG requires server-side Earthdata authentication;
+georeferenced cloud imagery and structured cyclone tracks are not integrated.

@@ -114,6 +114,43 @@ def sample_temperature_dataset():
     return ds
 
 
+@pytest.fixture
+def imd_2020_binary_fixture(tmp_path):
+    """Write deterministic native-grid test files without relying on local archives."""
+    data_dir = tmp_path / "raw"
+    rainfall_dir = data_dir / "rainfall"
+    max_temperature_dir = data_dir / "max_temperature"
+    min_temperature_dir = data_dir / "min_temperature"
+    rainfall_dir.mkdir(parents=True)
+    max_temperature_dir.mkdir()
+    min_temperature_dir.mkdir()
+
+    days = 366
+    rain_rows = np.arange(129, dtype=np.float32)[:, None]
+    rain_columns = np.arange(135, dtype=np.float32)[None, :]
+    rain_grid = 2.0 + rain_rows * 0.1 + rain_columns * 0.05
+    rainfall = np.empty((days, 129, 135), dtype="<f4")
+    for day_index in range(days):
+        rainfall[day_index] = rain_grid + (day_index % 7) * 0.2
+    rainfall[:, 0, 0] = -999.0
+    rainfall.tofile(rainfall_dir / "imd_rfp25_2020.grd")
+
+    temperature_rows = np.arange(31, dtype=np.float32)[:, None]
+    temperature_columns = np.arange(31, dtype=np.float32)[None, :]
+    spatial_pattern = temperature_rows * 0.1 + temperature_columns * 0.05
+    tmax = np.empty((days, 31, 31), dtype="<f4")
+    tmin = np.empty((days, 31, 31), dtype="<f4")
+    for day_index in range(days):
+        seasonal_pattern = (day_index % 30) * 0.01
+        tmax[day_index] = 30.0 + spatial_pattern + seasonal_pattern
+        tmin[day_index] = 18.0 + spatial_pattern + seasonal_pattern
+    tmax[:, 0, 0] = 99.9
+    tmin[:, 0, 0] = 99.9
+    tmax.tofile(max_temperature_dir / "maxtemp_2020.grd")
+    tmin.tofile(min_temperature_dir / "mintemp_2020.grd")
+    return data_dir
+
+
 def test_quality_checks(sample_rainfall_dataset, sample_temperature_dataset):
     """Test check_dataset_quality and validate_physical_bounds."""
     res_rain = check_dataset_quality(sample_rainfall_dataset, var_name="rain", raw_fill_value=-999.0)
@@ -165,9 +202,10 @@ def test_scikit_learn_normalization(sample_temperature_dataset, sample_rainfall_
     assert "tmax" in test_scaled.data_vars
 
 
-def test_main_preprocessing_pipeline_execution(tmp_path):
-    """Test main end-to-end preprocessing pipeline execution, record metrics, safety checks, and NetCDF exports."""
+def test_main_preprocessing_pipeline_execution(tmp_path, imd_2020_binary_fixture):
+    """Test end-to-end pipeline using temporary native-format annual IMD fixtures."""
     summary = run_preprocessing_pipeline(
+        data_dir=str(imd_2020_binary_fixture),
         output_dir=str(tmp_path),
         year=2020,
         save_netcdf=True,

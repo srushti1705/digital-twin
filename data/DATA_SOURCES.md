@@ -25,7 +25,7 @@ This document records the official dataset specifications for the **AI-Powered D
 The backend accepts annual `.grd` files and annual NetCDF `.nc`/`.nc4` files placed in `data/raw/rainfall/`, or in the directory configured by `IMD_RAINFALL_DIR`. See `data/raw/rainfall/README.md`.
 
 ### Intended Project Use
-- Serves as the primary target variable for monsoon precipitation modeling, spatial pattern mapping, AI/ML short-term rainfall forecasting, and what-if precipitation perturbation simulations.
+- Serves as the historical rainfall observation layer and a one-day-ahead forecast target. It is not a real-time feed.
 
 ---
 
@@ -44,11 +44,11 @@ The backend accepts annual `.grd` files and annual NetCDF `.nc`/`.nc4` files pla
 - **Grid shape**: 31 latitude rows × 31 longitude columns.
 - **Coordinates**: latitude 7.5°N through 37.5°N; longitude 67.5°E through 97.5°E, both on 1° increments.
 - **Encoding**: little-endian float32; `99.9` is the missing-value sentinel (stored as float32 and compared with tolerance).
-- **Validation**: file size 1,403,060 bytes; on 2025-07-15, the 355 valid grid cells range from 23.97195°C to 37.49660°C.
+- **Validation**: file size 1,403,060 bytes; across all of 2025, 129,552 cells are valid and 221,213 are missing. Valid values range from 5.30674°C to 46.15256°C (mean 30.60410°C).
 - **Acquisition**: official IMD Pune year-selection form, selecting 2025.
 
 ### Intended Project Use
-- Provides the baseline for daytime heat dynamics, localized heatwave monitoring, spatial re-gridding to match rainfall grids, AI temperature forecasting, and thermal perturbation testing.
+- Serves as the historical daily maximum-temperature observation layer and one-day-ahead forecast target. It remains at its native 1° grid; no resampling to the rainfall grid is performed.
 
 ---
 
@@ -67,11 +67,11 @@ The backend accepts annual `.grd` files and annual NetCDF `.nc`/`.nc4` files pla
 - **Grid shape**: 31 latitude rows × 31 longitude columns.
 - **Coordinates**: latitude 7.5°N through 37.5°N; longitude 67.5°E through 97.5°E, both on 1° increments.
 - **Encoding**: little-endian float32; `99.9` is the missing-value sentinel (stored as float32 and compared with tolerance).
-- **Validation**: file size 1,403,060 bytes; on 2025-07-15, the 355 valid grid cells range from 15.52389°C to 27.41776°C.
+- **Validation**: file size 1,403,060 bytes; across all of 2025, 129,544 cells are valid and 221,221 are missing. Valid values range from -2.45981°C to 31.34692°C (mean 19.19441°C).
 - **Acquisition**: official IMD Pune year-selection form, selecting 2025.
 
 ### Intended Project Use
-- Used for calculating Diurnal Temperature Range ($DTR = T_{\text{max}} - T_{\text{min}}$), tracking nighttime thermal trends, and building multi-variable climate state vectors for data assimilation.
+- Serves as the historical daily minimum-temperature observation layer and one-day-ahead forecast target. It remains at its native 1° grid; no resampling to the rainfall grid is performed.
 
 ---
 

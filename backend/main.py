@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from rainfall_api import router as rainfall_router
+from prediction_api import router as prediction_router
 from temperature_api import router as temperature_router
 
 app = FastAPI(
@@ -13,6 +14,7 @@ app = FastAPI(
 
 app.include_router(rainfall_router)
 app.include_router(temperature_router)
+app.include_router(prediction_router)
 
 app.add_middleware(
     CORSMiddleware,
