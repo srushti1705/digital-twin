@@ -80,6 +80,7 @@ lerna-debug.log*
 # Ignore raw & processed dataset contents while keeping folder structures via .gitkeep
 data/raw/*
 !data/raw/.gitkeep
+!data/raw/**/
 !data/raw/**/README.md
 data/processed/*
 !data/processed/.gitkeep
