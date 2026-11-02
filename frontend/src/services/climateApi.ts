@@ -104,6 +104,70 @@ export type NasaRainfallAvailability = {
   attribution: string;
 };
 
+export type PredictionVariable = "rainfall" | "tmax" | "tmin";
+
+export type PredictionModel = {
+  variable: PredictionVariable;
+  label: string;
+  units: string;
+  spatial_resolution_degrees: number;
+  available: boolean;
+  available_initialization_dates: string[];
+  model_name?: string;
+  latest_observation_date?: string | null;
+  training_period?: { start: string; end: string };
+  test_metrics?: {
+    sample_count: number;
+    MAE: number;
+    RMSE: number;
+    R2: number;
+  };
+  persistence_test_metrics?: {
+    sample_count: number;
+    MAE: number;
+    RMSE: number;
+    R2: number;
+  };
+  error?: string;
+};
+
+export type PredictionCatalog = {
+  models: PredictionModel[];
+};
+
+export type PredictionGrid = {
+  source: string;
+  variable: PredictionVariable;
+  model_name: string;
+  initialization_date: string;
+  forecast_date: string;
+  run_type: "historical_hindcast" | "out_of_sample_projection";
+  units: string;
+  spatial_resolution_degrees: number;
+  grid_shape: [number, number];
+  latitudes: number[];
+  longitudes: number[];
+  values: (number | null)[][];
+  valid_cell_count: number;
+  missing_cell_count: number;
+  training_period: { start: string; end: string };
+  evaluation: {
+    test_metrics: { sample_count: number; MAE: number; RMSE: number; R2: number };
+    persistence_test_metrics: {
+      sample_count: number;
+      MAE: number;
+      RMSE: number;
+      R2: number;
+    };
+    selection_criterion: {
+      minimum_validation_rmse_improvement_fraction: number;
+      maximum_validation_mae_degradation_fraction: number;
+      selected_model: string;
+    };
+    caveat: string;
+  };
+};
+
 async function fetchPayload<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, { signal });
   const payload: unknown = await response.json().catch(() => null);
@@ -302,6 +366,53 @@ export async function fetchNasaRainfallAvailability(
     payload.queryable_measurements !== false
   ) {
     throw new Error("NASA GIBS availability response has an unexpected format.");
+  }
+  return payload;
+}
+
+export async function fetchPredictionCatalog(
+  signal?: AbortSignal,
+): Promise<PredictionCatalog> {
+  const payload = await fetchPayload<PredictionCatalog>("/api/predictions/catalog", signal);
+  if (
+    !Array.isArray(payload.models) ||
+    payload.models.some(
+      (model) =>
+        !["rainfall", "tmax", "tmin"].includes(model.variable) ||
+        typeof model.available !== "boolean" ||
+        !Array.isArray(model.available_initialization_dates),
+    )
+  ) {
+    throw new Error("Climate prediction catalog has an unexpected format.");
+  }
+  return payload;
+}
+
+export async function fetchPredictionGrid(
+  variable: PredictionVariable,
+  initializationDate: string,
+  signal?: AbortSignal,
+): Promise<PredictionGrid> {
+  const query = new URLSearchParams({ initialization_date: initializationDate });
+  const payload = await fetchPayload<PredictionGrid>(
+    `/api/predictions/${variable}?${query}`,
+    signal,
+  );
+  if (
+    payload.variable !== variable ||
+    !Array.isArray(payload.latitudes) ||
+    !Array.isArray(payload.longitudes) ||
+    !Array.isArray(payload.values) ||
+    payload.values.length !== payload.latitudes.length ||
+    payload.values.some(
+      (row) =>
+        !Array.isArray(row) ||
+        row.length !== payload.longitudes.length ||
+        row.some((value) => value !== null && typeof value !== "number"),
+    ) ||
+    typeof payload.forecast_date !== "string"
+  ) {
+    throw new Error(`The ${variable} prediction grid has an unexpected format.`);
   }
   return payload;
 }

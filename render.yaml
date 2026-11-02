@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: india-climate-twin-api
+    runtime: python
+    plan: free
+    autoDeploy: false
+    buildCommand: python -m pip install -r backend/requirements.txt
+    startCommand: bash backend/start.sh
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: CLIMATE_DATA_ROOT
+        value: /tmp/climate-data
+      - key: CLIMATE_MODEL_DIR
+        value: /tmp/climate-models
+      - key: CLIMATE_METRICS_DIR
+        value: /tmp/climate-metrics
+      - key: IMD_DATA_YEARS
+        value: "2025"
+      - key: FRONTEND_ORIGINS
+        value: https://india-climate-twin-web.onrender.com
+      - key: CLIMATE_MODEL_BUNDLE_URL
+        sync: false
+
+  - type: web
+    name: india-climate-twin-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: 22.16.0
+      - key: VITE_API_BASE_URL
+        value: https://india-climate-twin-api.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
