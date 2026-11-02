@@ -1,22 +1,32 @@
-
 import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from rainfall_api import router as rainfall_router
-from prediction_api import router as prediction_router
-from temperature_api import router as temperature_router
+try:
+    from .rainfall_api import router as rainfall_router
+    from .prediction_api import router as prediction_router
+    from .temperature_api import router as temperature_router
+    from .live_api import router as live_router
+    from .scenario_api import router as scenario_router
+except ImportError:
+    from rainfall_api import router as rainfall_router
+    from prediction_api import router as prediction_router
+    from temperature_api import router as temperature_router
+    from live_api import router as live_router
+    from scenario_api import router as scenario_router
 
 app = FastAPI(
     title="India Climate Twin API",
-    description="Climate data, AI predictions and simulation services",
-    version="0.1.0",
+    description="Climate data, AI predictions, live telemetry, and What-If simulation services",
+    version="0.2.0",
 )
 
 app.include_router(rainfall_router)
 app.include_router(temperature_router)
 app.include_router(prediction_router)
+app.include_router(live_router)
+app.include_router(scenario_router)
 
 configured_origins = os.environ.get("FRONTEND_ORIGINS")
 allowed_origins = (
@@ -48,7 +58,7 @@ def home():
     return {
         "project": "India Climate Twin",
         "status": "running",
-        "message": "Climate intelligence API is ready",
+        "message": "Climate intelligence and What-If simulation API is ready",
     }
 
 

@@ -63,54 +63,51 @@ export function buildGeographicLabelsDataSources(): {
     });
   }
 
-  // 2. City & Town Floating Annotations with 3 Zoom-Level Visibility Tiers:
-  // - Tier 1 (Metros): visible from India view (100km to 5,500,000m)
-  // - Tier 2 (Major Regional Hubs & Capitals: Mumbai, Pune, Nashik, Nagpur, Solapur): visible at State view (40km to 2,400,000m)
-  // - Tier 3 (Towns & secondary cities): visible at Closer zoom (1km to 850,000m)
-  for (const place of INDIAN_CITIES) {
-    const nearDistance = place.tier === 1 ? 80_000 : place.tier === 2 ? 30_000 : 1_000;
-    const farDistance =
-      place.tier === 1 ? 5_500_000 : place.tier === 2 ? 2_400_000 : 850_000;
-    const pointColor =
-      place.tier === 1
-        ? Cesium.Color.fromCssColorString("#38bdf8")
-        : place.tier === 2
-          ? Cesium.Color.fromCssColorString("#7dd3fc")
-          : Cesium.Color.fromCssColorString("#94a3b8");
-    const pointSize = place.tier === 1 ? 3.8 : place.tier === 2 ? 3.0 : 2.4;
-    const fontSize = place.tier === 1 ? 10 : place.tier === 2 ? 9.5 : 8.5;
-    const fontWeight = place.tier === 1 ? "600" : "500";
-    const textColor =
-      place.tier === 1 ? "#f8fafc" : place.tier === 2 ? "#e2e8f0" : "#94a3b8";
+  // 2. City & Town Floating Markers + Labels (LOD Hierarchy: Tier 1, Tier 2, Tier 3)
+  for (const city of INDIAN_CITIES) {
+    const nearDistance = 10_000;
+    let farDistance = 1_800_000; // Tier 3 default
+    let dotPixelSize = 3.5;
+    let fontSize = 9;
+
+    if (city.tier === 1) {
+      farDistance = 4_500_000;
+      dotPixelSize = 4.5;
+      fontSize = 10;
+    } else if (city.tier === 2) {
+      farDistance = 2_800_000;
+      dotPixelSize = 4.0;
+      fontSize = 9.5;
+    }
 
     cityLabelsSource.entities.add({
-      id: `city-label-${place.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-      name: place.name,
-      position: Cesium.Cartesian3.fromDegrees(place.lon, place.lat),
+      id: `city-marker-${city.name.toLowerCase().replace(/\s+/g, "-")}`,
+      name: city.name,
+      position: Cesium.Cartesian3.fromDegrees(city.lon, city.lat),
       properties: new Cesium.PropertyBag({
-        kind: "city-label",
-        cityName: place.name,
-        state_name: place.state,
-        tier: place.tier,
-        latitude: place.lat,
-        longitude: place.lon,
+        kind: "city-marker",
+        city_name: city.name,
+        state: city.state,
+        tier: city.tier,
       }),
       point: {
-        pixelSize: pointSize,
-        color: pointColor,
-        outlineColor: Cesium.Color.fromCssColorString("#03101c"),
-        outlineWidth: 1.2,
+        pixelSize: dotPixelSize,
+        color: Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.95),
+        outlineColor: Cesium.Color.fromCssColorString("#020617"),
+        outlineWidth: 1.5,
         distanceDisplayCondition: new Cesium.DistanceDisplayCondition(nearDistance, farDistance),
+        scaleByDistance: new Cesium.NearFarScalar(100_000, 1.0, 3_500_000, 0.8),
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
       label: {
-        text: place.name,
-        font: `${fontWeight} ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
-        fillColor: Cesium.Color.fromCssColorString(textColor),
-        outlineColor: Cesium.Color.fromCssColorString("#03101c"),
-        outlineWidth: 2.2,
+        text: city.name,
+        font: `500 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
+        fillColor: Cesium.Color.fromCssColorString("#e2e8f0"),
+        outlineColor: Cesium.Color.fromCssColorString("#020617"),
+        outlineWidth: 2,
         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        pixelOffset: new Cesium.Cartesian2(0, -7),
+        showBackground: false,
+        pixelOffset: new Cesium.Cartesian2(0, -9),
         verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
         horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
         distanceDisplayCondition: new Cesium.DistanceDisplayCondition(nearDistance, farDistance),
@@ -158,4 +155,71 @@ export function styleBoundaryEntities(
     );
     entity.polygon.outlineWidth = new Cesium.ConstantProperty(isSelected ? 2 : 1);
   }
+}
+
+/**
+ * Creates a Cesium WebMapServiceImageryProvider for NASA GIBS satellite products.
+ */
+export function createGibsSatelliteProvider(
+  layerName: string,
+  timeDate: string,
+  format = "image/png",
+): Cesium.WebMapServiceImageryProvider {
+  return new Cesium.WebMapServiceImageryProvider({
+    url: "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi",
+    layers: layerName,
+    parameters: {
+      service: "WMS",
+      version: "1.1.1",
+      request: "GetMap",
+      transparent: "true",
+      format,
+      time: timeDate,
+    },
+    credit: "NASA Global Imagery Browse Services (GIBS)",
+  });
+}
+
+/** Diverging color scale for rainfall differences (Deficit: Amber/Red; Surplus: Cyan/Royal Blue). */
+export function rainfallDiffColor(delta: number): number[] {
+  if (Math.abs(delta) < 0.2) return [0, 0, 0, 0];
+  if (delta < 0) {
+    const intensity = Math.min(1.0, Math.abs(delta) / 25.0);
+    // Interpolate from light orange to deep crimson
+    return [
+      Math.round(230 + 25 * intensity),
+      Math.round(140 * (1 - intensity * 0.7)),
+      Math.round(50 * (1 - intensity * 0.7)),
+      Math.round(180 + 55 * intensity),
+    ];
+  }
+  const intensity = Math.min(1.0, delta / 25.0);
+  // Interpolate from bright cyan to deep ocean blue
+  return [
+    Math.round(50 * (1 - intensity * 0.5)),
+    Math.round(180 + 40 * (1 - intensity)),
+    Math.round(240),
+    Math.round(180 + 55 * intensity),
+  ];
+}
+
+/** Diverging color scale for temperature differences (Cooling: Cyan/Blue; Warming: Yellow/Crimson). */
+export function temperatureDiffColor(delta: number): number[] {
+  if (Math.abs(delta) < 0.1) return [0, 0, 0, 0];
+  if (delta < 0) {
+    const intensity = Math.min(1.0, Math.abs(delta) / 5.0);
+    return [
+      Math.round(40 * (1 - intensity * 0.5)),
+      Math.round(130 + 100 * (1 - intensity)),
+      Math.round(245),
+      Math.round(180 + 55 * intensity),
+    ];
+  }
+  const intensity = Math.min(1.0, delta / 5.0);
+  return [
+    Math.round(245),
+    Math.round(160 * (1 - intensity * 0.8)),
+    Math.round(40 * (1 - intensity * 0.8)),
+    Math.round(180 + 55 * intensity),
+  ];
 }

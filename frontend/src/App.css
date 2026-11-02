@@ -1022,3 +1022,1026 @@ button {
     font-size: 8px;
   }
 }
+
+
+/* =======================================================
+   LIVE CLIMATE & WHAT-IF SCENARIO EXTENSIONS
+   ======================================================= */
+
+/* Mode switch 4-item support */
+.mode-switch {
+  display: flex;
+  align-items: center;
+  background: rgba(14, 21, 28, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.mode-switch button {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.65);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mode-switch button:hover {
+  color: #fff;
+}
+
+.mode-switch button.selected {
+  background: rgba(56, 189, 248, 0.22);
+  color: #38bdf8;
+  font-weight: 600;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.2);
+}
+
+/* Live Telemetry Ticker / Strip */
+.live-telemetry-strip {
+  position: absolute;
+  z-index: 2;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(840px, calc(100vw - 120px));
+  background: rgba(14, 21, 28, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 6px;
+  padding: 8px 12px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+.live-strip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 6px;
+}
+
+.live-strip-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #38bdf8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.live-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 8px #22c55e;
+  animation: livePulse 2s infinite;
+}
+
+@keyframes livePulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+  70% { transform: scale(1.05); box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+}
+
+.live-providers-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.provider-badge {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.provider-badge.active {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.provider-badge.gated {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.live-station-scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.3) transparent;
+}
+
+.live-station-pill {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #f1f5f9;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.live-station-pill:hover,
+.live-station-pill.selected {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #7dd3fc;
+}
+
+.live-station-pill strong {
+  color: #fff;
+  font-size: 11px;
+}
+
+.live-station-pill .temp {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.live-station-pill .rain {
+  color: #38bdf8;
+}
+
+/* What-If Scenario Dock */
+.whatif-dock {
+  position: absolute;
+  z-index: 2;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(920px, calc(100vw - 100px));
+  max-height: 80vh;
+  overflow-y: auto;
+  background: rgba(14, 21, 28, 0.94);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 6px;
+  padding: 12px 16px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.whatif-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  padding-bottom: 8px;
+}
+
+.whatif-dock-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #38bdf8;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.whatif-dock-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.whatif-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.whatif-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.whatif-select,
+.whatif-input {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: #fff;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.whatif-select:focus,
+.whatif-input:focus {
+  border-color: #38bdf8;
+}
+
+.whatif-slider-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.whatif-slider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.whatif-slider-value {
+  font-size: 11px;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.15);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.whatif-range {
+  width: 100%;
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+
+.whatif-presets {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.whatif-preset-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 9.5px;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.whatif-preset-btn:hover {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #fff;
+}
+
+.whatif-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
+.whatif-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #0284c7;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 0 12px rgba(2, 132, 199, 0.4);
+  transition: all 0.15s ease;
+}
+
+.whatif-run-btn:hover:not(:disabled) {
+  background: #0369a1;
+}
+
+.whatif-run-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.whatif-reset-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.whatif-reset-btn:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* What-If Results Summary Card */
+.whatif-results-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 5px;
+  padding: 10px;
+}
+
+.whatif-layer-toggle {
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 3px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.whatif-layer-toggle button {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.whatif-layer-toggle button.active {
+  background: #0284c7;
+  color: #fff;
+  font-weight: 600;
+}
+
+.whatif-metrics-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.whatif-metric-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.whatif-metric-box .label {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+}
+
+.whatif-metric-box .val {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f8fafc;
+  margin-top: 2px;
+}
+
+.whatif-metric-box .val.positive {
+  color: #38bdf8;
+}
+
+.whatif-metric-box .val.negative {
+  color: #f43f5e;
+}
+
+.whatif-disclaimer-box {
+  font-size: 9.5px;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.4;
+  border-left: 2px solid #38bdf8;
+  padding-left: 8px;
+  margin-top: 4px;
+}
+
+.whatif-warning-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+
+/* Difference Legend */
+.diff-legend-gradient {
+  display: flex;
+  height: 10px;
+  border-radius: 2px;
+  margin: 6px 0;
+  background: linear-gradient(to right, #dc2626, #ea580c, rgba(0,0,0,0) 50%, #38bdf8, #2563eb);
+}
+
+.diff-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.top-overlay {
+  z-index: 5;
+  height: 72px;
+  padding: 0 20px;
+  background: linear-gradient(180deg, rgba(7, 12, 14, 0.96), rgba(7, 12, 14, 0.55));
+}
+
+.brand-name {
+  font-size: 11px;
+}
+
+.top-right-controls {
+  gap: 12px;
+}
+
+.mode-switch {
+  flex-wrap: nowrap;
+}
+
+.mode-switch button {
+  white-space: nowrap;
+}
+
+.active-mode-description {
+  display: none;
+}
+
+.map-toolbar {
+  top: 84px;
+  left: 20px;
+  width: min(292px, calc(100vw - 40px));
+  gap: 8px;
+}
+
+.map-toolbar-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.map-toolbar-actions .toolbar-button {
+  flex: 1;
+  justify-content: center;
+}
+
+.navigation-rail {
+  z-index: 4;
+  top: 84px;
+  bottom: auto;
+  left: 50%;
+  flex-direction: row;
+  transform: translateX(-50%);
+}
+
+.weather-panel,
+.settings-popover {
+  z-index: 4;
+  border: 1px solid rgba(148, 185, 190, 0.2);
+  background: rgba(7, 13, 16, 0.96);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(12px);
+}
+
+.weather-panel {
+  top: 84px;
+  right: 20px;
+  width: min(330px, calc(100vw - 40px));
+  max-height: calc(100dvh - 104px);
+  overscroll-behavior: contain;
+}
+
+.settings-popover {
+  top: 172px;
+  left: 20px;
+  width: min(292px, calc(100vw - 40px));
+  max-height: calc(100dvh - 192px);
+  overscroll-behavior: contain;
+}
+
+.mode-description {
+  margin: 0 0 14px;
+  color: rgba(228, 238, 239, 0.76);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.data-kind-label {
+  color: #a8d7db;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.prediction-retrospective-note {
+  margin-top: 6px;
+  color: #f8cf82;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.prediction-run-btn {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  border-radius: 4px;
+  background: rgba(2, 132, 199, 0.75);
+  color: #f0fbff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.prediction-run-btn:hover:not(:disabled) {
+  background: #0369a1;
+}
+
+.prediction-run-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.timeline-control {
+  bottom: 14px;
+  width: min(580px, calc(100vw - 700px));
+  min-width: 290px;
+}
+
+.rainfall-legend {
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.live-telemetry-strip {
+  left: 50%;
+  width: min(760px, calc(100vw - 700px));
+  transform: translateX(-50%);
+}
+
+.live-strip-header {
+  gap: 10px;
+}
+
+.live-providers-badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.live-station-scroll {
+  max-width: 100%;
+}
+
+.live-station-pill {
+  min-height: 30px;
+}
+
+.record-kind,
+.record-status {
+  color: rgba(214, 230, 233, 0.68);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.record-kind {
+  padding: 1px 3px;
+  border: 1px solid rgba(125, 211, 252, 0.25);
+  border-radius: 3px;
+}
+
+.live-data-error,
+.live-empty-state,
+.scenario-scope-error {
+  margin: 0;
+  color: #f0b2a7;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.rainfall-legend-scale {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+}
+
+.legend-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.legend-color {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+.weather-panel .whatif-dock {
+  position: static;
+  width: auto;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  transform: none;
+}
+
+.weather-panel .whatif-dock-header {
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.weather-panel .whatif-dock-title {
+  font-size: 10px;
+}
+
+.weather-panel .whatif-dock-header > div:last-child {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.weather-panel .whatif-dock-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.weather-panel .whatif-field-group > div {
+  min-width: 0;
+}
+
+.weather-panel .whatif-field-group .whatif-select,
+.weather-panel .whatif-field-group .whatif-input {
+  min-width: 0;
+}
+
+.weather-panel .whatif-layer-toggle {
+  flex-wrap: wrap;
+}
+
+.weather-panel .whatif-layer-toggle button {
+  min-width: 72px;
+}
+
+.weather-panel .whatif-metrics-row {
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+}
+
+.scenario-workflow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 7px 8px;
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.scenario-workflow strong {
+  color: #b7e9ef;
+}
+
+.scenario-guidance,
+.scenario-empty-state,
+.scenario-stale-note {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.scenario-stale-note {
+  color: #f8cf82;
+}
+
+@media (max-width: 1000px) {
+  .weather-panel {
+    right: 12px;
+    width: min(300px, calc(100vw - 24px));
+  }
+
+  .settings-popover {
+    left: 12px;
+    width: min(270px, calc(100vw - 24px));
+  }
+
+  .map-toolbar {
+    left: 12px;
+    width: min(270px, calc(100vw - 24px));
+  }
+
+  .timeline-control,
+  .live-telemetry-strip {
+    left: 12px;
+    right: auto;
+    width: min(600px, calc(100vw - 340px));
+    min-width: 250px;
+    transform: none;
+  }
+
+  .rainfall-legend {
+    left: 12px;
+    width: min(260px, calc(100vw - 340px));
+    transform: none;
+  }
+
+  .earth-app.layers-open .timeline-control,
+  .earth-app.layers-open .live-telemetry-strip {
+    right: 12px;
+    left: auto;
+  }
+
+  .earth-app.layers-open .rainfall-legend {
+    right: 12px;
+    left: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .top-overlay {
+    height: 104px;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 5px;
+    padding: 7px 12px;
+    background: rgba(7, 12, 14, 0.96);
+  }
+
+  .brand-lockup {
+    gap: 7px;
+  }
+
+  .brand-mark {
+    width: 21px;
+    height: 21px;
+  }
+
+  .brand-mark span {
+    width: 13px;
+    height: 13px;
+  }
+
+  .brand-name {
+    font-size: 9px;
+  }
+
+  .location-line {
+    max-width: min(48vw, 220px);
+    margin-top: 1px;
+    font-size: 9px;
+  }
+
+  .top-right-controls {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 0;
+  }
+
+  .active-mode-description {
+    display: block;
+    max-width: 100%;
+    margin: 3px 2px 0;
+    overflow: hidden;
+    color: rgba(228, 238, 239, 0.72);
+    font-size: 9px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mode-switch {
+    display: flex;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .mode-switch button {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 3px;
+    font-size: 9px;
+  }
+
+  .top-status {
+    display: none;
+  }
+
+  .map-toolbar {
+    top: 112px;
+    left: 12px;
+    width: calc(100vw - 24px);
+    flex-direction: row;
+    align-items: stretch;
+  }
+
+  .place-search {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .map-toolbar-actions {
+    flex: 0 0 auto;
+  }
+
+  .map-toolbar-actions .toolbar-button {
+    min-width: 58px;
+    gap: 4px;
+    padding: 0 7px;
+  }
+
+  .navigation-rail {
+    top: 160px;
+    right: 12px;
+    left: auto;
+    transform: none;
+  }
+
+  .navigation-rail-historical,
+  .navigation-rail-forecast {
+    top: 160px;
+  }
+
+  .weather-panel,
+  .settings-popover {
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+    max-height: 35dvh;
+    padding: 13px;
+  }
+
+  .settings-popover {
+    max-height: 35dvh;
+  }
+
+  .timeline-control {
+    top: 210px;
+    right: auto;
+    bottom: auto;
+    left: 12px;
+    width: calc(100vw - 24px);
+    min-width: 0;
+    grid-template-columns: auto minmax(110px, 1fr);
+    gap: 8px;
+    padding: 5px 8px;
+    transform: none;
+  }
+
+  .timeline-source {
+    display: none;
+  }
+
+  .rainfall-legend {
+    right: 12px;
+    top: 270px;
+    bottom: auto;
+    left: 12px;
+    width: auto;
+    max-height: 10dvh;
+    overflow: auto;
+    transform: none;
+  }
+
+  .live-telemetry-strip {
+    top: 216px;
+    right: 12px;
+    bottom: auto;
+    left: 12px;
+    width: auto;
+    max-height: 20dvh;
+    padding: 7px 9px;
+    transform: none;
+  }
+
+  .live-strip-header {
+    align-items: flex-start;
+  }
+
+  .live-providers-badges {
+    max-height: 36px;
+    overflow: auto;
+  }
+
+  .live-station-scroll {
+    max-height: 8dvh;
+  }
+
+  .live-station-pill {
+    gap: 5px;
+    padding: 4px 7px;
+    font-size: 10px;
+  }
+
+  .live-station-pill strong {
+    font-size: 10px;
+  }
+
+  .globe-canvas .cesium-viewer-bottom {
+    right: 8px;
+    bottom: 8px;
+    max-width: 55vw;
+  }
+}
+
+@media (max-width: 380px) {
+  .brand-mark {
+    display: none;
+  }
+
+  .location-line {
+    display: block;
+    max-width: 190px;
+  }
+
+  .map-toolbar-actions .toolbar-button {
+    min-width: 48px;
+    font-size: 10px;
+  }
+
+  .mode-switch button {
+    font-size: 8px;
+  }
+
+  .weather-panel,
+  .settings-popover {
+    max-height: 32dvh;
+  }
+
+  .rainfall-legend {
+    top: 270px;
+    max-height: 8dvh;
+  }
+}
+
+@media (max-width: 640px) and (max-height: 500px) {
+  .weather-panel,
+  .settings-popover {
+    top: 272px;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    max-height: none;
+  }
+
+  .earth-app.side-panel-open .rainfall-legend {
+    display: none;
+  }
+
+  .live-telemetry-strip {
+    top: 206px;
+    max-height: 16dvh;
+  }
+
+  .live-providers-badges {
+    display: none;
+  }
+
+  .live-station-scroll {
+    max-height: 5dvh;
+  }
+}
