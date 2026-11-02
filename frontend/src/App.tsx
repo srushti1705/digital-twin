@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
   CalendarDays,
@@ -7,6 +7,7 @@ import {
   Crosshair,
   Droplets,
   Globe2,
+  Info,
   Layers3,
   Search,
   Thermometer,
@@ -19,7 +20,10 @@ import "./App.css";
 import {
   ORIGINAL_EARTH_IMAGERY_PROVIDER,
   buildGeographicLabelsDataSources,
+  createGibsSatelliteProvider,
+  rainfallDiffColor,
   styleBoundaryEntities,
+  temperatureDiffColor,
 } from "./services/mapLayers";
 import { fetchApiHealth } from "./services/climateApi";
 import { searchPlaces } from "./services/geocoding";
@@ -31,9 +35,10 @@ import {
   fetchImdTemperatureCell,
   fetchImdTemperatureDates,
   fetchImdTemperatureGrid,
-  fetchPredictionCatalog,
-  fetchPredictionGrid,
   fetchNasaRainfallAvailability,
+  fetchPredictionCatalog,
+  fetchPredictionCell,
+  fetchPredictionGrid,
 } from "./services/climateApi";
 import type {
   ImdRainfallCell,
@@ -45,6 +50,27 @@ import type {
   PredictionGrid,
   PredictionVariable,
 } from "./services/climateApi";
+import {
+  fetchLiveStatus,
+  fetchLiveWeather,
+  fetchSatelliteLayers,
+} from "./services/liveClimateApi";
+import type {
+  ProviderStatus,
+  SatelliteLayerInfo,
+  StationWeatherRecord,
+} from "./services/liveClimateApi";
+import {
+  fetchScenarioScopes,
+  runClimateScenario,
+} from "./services/scenarioApi";
+import type {
+  CompactGridData,
+  ScenarioResult,
+  ScenarioScope,
+} from "./services/scenarioApi";
+import { LiveTelemetryBar } from "./components/LiveTelemetryBar";
+import { WhatIfScenarioDock } from "./components/WhatIfScenarioDock";
 
 const INDIA_VIEW = { longitude: 81.8, latitude: 22.8, height: 4_950_000 };
 const MAHARASHTRA_VIEW = { longitude: 76.2, latitude: 19.3, height: 1_150_000 };
@@ -52,72 +78,63 @@ const GLOBAL_VIEW = { longitude: 80, latitude: 20, height: 14_000_000 };
 const STATE_BOUNDARY_MAX_HEIGHT = 7_000_000;
 
 type Location = { code: string; name: string; region: string };
-type ViewMode = "historical" | "forecast";
+type ViewMode = "historical" | "live" | "forecast" | "whatif";
 type ViewerHandle = { cesiumElement?: Cesium.Viewer };
 type ApiStatus = "checking" | "healthy" | "unavailable";
 type RainfallSource = "none" | "imd" | "nasa";
 type TemperatureSource = "none" | "tmax" | "tmin";
 type RainfallCellStatus = "idle" | "loading" | "unavailable" | "error";
+
 type SelectedPredictionCell = {
   latitude: number;
   longitude: number;
   value: number | null;
+  missing: boolean;
+};
+
+const modeDescriptions: Record<ViewMode, { title: string; description: string }> = {
+  historical: {
+    title: "Historical observations",
+    description: "Explore recorded climate observations across India.",
+  },
+  live: {
+    title: "Latest available conditions",
+    description: "View the latest available weather data and satellite imagery. Model-derived conditions are identified separately from station observations.",
+  },
+  forecast: {
+    title: "AI prediction",
+    description: "Explore one-day-ahead AI estimates from available model dates. Predictions are not observations or official forecasts.",
+  },
+  whatif: {
+    title: "What-if simulation",
+    description: "Test hypothetical rainfall and temperature changes against a selected baseline.",
+  },
 };
 
 const unavailableClimateLayers = [
   {
-    label: "Satellite clouds",
-    source: "IMD IR-1 imagery exists; no georeferenced map feed is connected",
-    sourceUrl: "https://mausam.imd.gov.in/responsive/satellite.php",
-    sourceLabel: "Official IMD imagery",
+    label: "INSAT-3D Cloud Imagery",
+    source: "ISRO MOSDAC / IMD georeferenced satellite feed is not currently connected.",
+    sourceUrl: "https://www.mosdac.gov.in/",
+    sourceLabel: "MOSDAC data catalog",
     icon: Cloud,
   },
   {
-    label: "Cyclone information",
-    source: "RSMC bulletins exist; no structured track feed is connected",
+    label: "Cyclone Tracking",
+    source: "RSMC New Delhi cyclone track and intensity bulletin feed is not connected.",
     sourceUrl: "https://rsmcnewdelhi.imd.gov.in/",
-    sourceLabel: "Official RSMC",
-    icon: Crosshair,
+    sourceLabel: "RSMC New Delhi",
+    icon: Compass,
   },
-] as const;
+];
 
-let indiaBoundariesPromise: Promise<Cesium.GeoJsonDataSource> | undefined;
-
-function loadIndiaBoundaries() {
-  if (!indiaBoundariesPromise) {
-    indiaBoundariesPromise = Cesium.GeoJsonDataSource.load("/india-states.geojson").catch(
-      (error: unknown) => {
-        indiaBoundariesPromise = undefined;
-        throw error;
-      },
-    );
-  }
-  return indiaBoundariesPromise;
-}
-
-function isAbortError(error: unknown) {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-function configureViewerScene(viewer: Cesium.Viewer) {
+function setupPanDrag(viewer: Cesium.Viewer) {
   const controls = viewer.scene.screenSpaceCameraController;
-  viewer.scene.globe.enableLighting = true;
-  viewer.scene.globe.showGroundAtmosphere = true;
-  viewer.scene.globe.depthTestAgainstTerrain = false;
-  viewer.scene.fog.enabled = true;
-  if (viewer.scene.skyAtmosphere) viewer.scene.skyAtmosphere.show = true;
-  if (viewer.scene.skyBox) viewer.scene.skyBox.show = false;
-  viewer.scene.backgroundColor = Cesium.Color.fromCssColorString("#03101c");
-  controls.enableInputs = true;
-  controls.minimumZoomDistance = 500;
-  controls.maximumZoomDistance = 30_000_000;
-  controls.zoomFactor = 3;
-  controls.inertiaSpin = 0.85;
-  controls.inertiaTranslate = 0.85;
-  controls.inertiaZoom = 0.8;
-  controls.rotateEventTypes = Cesium.CameraEventType.LEFT_DRAG;
-  controls.tiltEventTypes = Cesium.CameraEventType.RIGHT_DRAG;
-  controls.translateEventTypes = [];
+  controls.enableRotate = false;
+  controls.enableTilt = false;
+  controls.enableLook = false;
+  controls.enableTranslate = false;
+  controls.enableZoom = false;
   controls.zoomEventTypes = Cesium.CameraEventType.PINCH;
 
   const canvas = viewer.scene.canvas;
@@ -126,13 +143,11 @@ function configureViewerScene(viewer: Cesium.Viewer) {
     event.preventDefault();
     const camera = viewer.camera;
     const currentHeight = camera.positionCartographic.height;
-    const zoomFactor = Math.exp(event.deltaY * 0.001);
-    const targetHeight = Cesium.Math.clamp(
-      currentHeight * zoomFactor,
-      controls.minimumZoomDistance,
-      controls.maximumZoomDistance,
-    );
-    const distance = Math.abs(targetHeight - currentHeight);
+    const minHeight = 20_000;
+    const maxHeight = 20_000_000;
+    const zoomFactor = event.deltaY < 0 ? 0.78 : 1.28;
+    const nextHeight = Cesium.Math.clamp(currentHeight * zoomFactor, minHeight, maxHeight);
+    const distance = currentHeight - nextHeight;
     if (distance === 0) return;
 
     const bounds = canvas.getBoundingClientRect();
@@ -141,32 +156,28 @@ function configureViewerScene(viewer: Cesium.Viewer) {
       event.clientY - bounds.top,
     );
     const anchorBefore = camera.pickEllipsoid(pointer, viewer.scene.globe.ellipsoid);
-    if (targetHeight > currentHeight) camera.zoomOut(distance);
-    else camera.zoomIn(distance);
-
-    if (anchorBefore) {
-      const anchorAfter = camera.pickEllipsoid(pointer, viewer.scene.globe.ellipsoid);
-      if (anchorAfter) {
-        const correction = Cesium.Cartesian3.subtract(
-          anchorBefore,
-          anchorAfter,
-          new Cesium.Cartesian3(),
-        );
-        const correctionDistance = Cesium.Cartesian3.magnitude(correction);
-        if (correctionDistance > 0) {
-          camera.move(
-            Cesium.Cartesian3.normalize(correction, correction),
-            correctionDistance,
-          );
-        }
-      }
+    camera.zoomIn(distance);
+    if (!anchorBefore) {
+      viewer.scene.requestRender();
+      return;
     }
+    const anchorAfter = camera.pickEllipsoid(pointer, viewer.scene.globe.ellipsoid);
+    if (!anchorAfter) {
+      viewer.scene.requestRender();
+      return;
+    }
+    const correction = Cesium.Cartesian3.subtract(
+      anchorBefore,
+      anchorAfter,
+      new Cesium.Cartesian3(),
+    );
+    camera.position = Cesium.Cartesian3.add(camera.position, correction, camera.position);
     viewer.scene.requestRender();
   };
+
   const startPan = (event: MouseEvent) => {
-    if (event.button !== 1 && !(event.button === 0 && event.shiftKey)) return;
+    if (event.button !== 0) return;
     panPosition = new Cesium.Cartesian2(event.clientX, event.clientY);
-    event.preventDefault();
   };
   const movePan = (event: MouseEvent) => {
     if (!panPosition) return;
@@ -195,10 +206,6 @@ function configureViewerScene(viewer: Cesium.Viewer) {
     window.removeEventListener("mouseup", endPan);
     window.removeEventListener("blur", endPan);
   };
-}
-
-function formatCoordinate(value: number, positive: string, negative: string) {
-  return `${Math.abs(value).toFixed(2)}°${value < 0 ? negative : positive}`;
 }
 
 const rainfallColorStops = [
@@ -262,7 +269,15 @@ function isNasaDateAvailable(
   });
 }
 
+const rainfallRasterCache = new WeakMap<ImdRainfallGrid, string>();
+const temperatureRasterCache = new WeakMap<ImdTemperatureGrid, string>();
+const predictionRasterCache = new WeakMap<PredictionGrid, string>();
+const scenarioRasterCache = new WeakMap<CompactGridData, Map<string, string>>();
+
 function createRainfallRaster(grid: ImdRainfallGrid) {
+  const cachedRaster = rainfallRasterCache.get(grid);
+  if (cachedRaster) return cachedRaster;
+
   const width = grid.longitudes.length;
   const height = grid.latitudes.length;
   const canvas = document.createElement("canvas");
@@ -285,10 +300,15 @@ function createRainfallRaster(grid: ImdRainfallGrid) {
     });
   });
   context.putImageData(image, 0, 0);
-  return canvas.toDataURL("image/png");
+  const raster = canvas.toDataURL("image/png");
+  rainfallRasterCache.set(grid, raster);
+  return raster;
 }
 
 function createTemperatureRaster(grid: ImdTemperatureGrid) {
+  const cachedRaster = temperatureRasterCache.get(grid);
+  if (cachedRaster) return cachedRaster;
+
   const width = grid.longitudes.length;
   const height = grid.latitudes.length;
   const canvas = document.createElement("canvas");
@@ -311,10 +331,15 @@ function createTemperatureRaster(grid: ImdTemperatureGrid) {
     });
   });
   context.putImageData(image, 0, 0);
-  return canvas.toDataURL("image/png");
+  const raster = canvas.toDataURL("image/png");
+  temperatureRasterCache.set(grid, raster);
+  return raster;
 }
 
 function createPredictionRaster(grid: PredictionGrid) {
+  const cachedRaster = predictionRasterCache.get(grid);
+  if (cachedRaster) return cachedRaster;
+
   const width = grid.longitudes.length;
   const height = grid.latitudes.length;
   const canvas = document.createElement("canvas");
@@ -337,7 +362,63 @@ function createPredictionRaster(grid: PredictionGrid) {
     });
   });
   context.putImageData(image, 0, 0);
-  return canvas.toDataURL("image/png");
+  const raster = canvas.toDataURL("image/png");
+  predictionRasterCache.set(grid, raster);
+  return raster;
+}
+
+function createScenarioCompactRaster(
+  grid: CompactGridData,
+  isDifference: boolean,
+  isRainfall: boolean,
+) {
+  const cacheKey = `${isDifference ? "difference" : "value"}:${isRainfall ? "rainfall" : "temperature"}`;
+  const cachedRaster = scenarioRasterCache.get(grid)?.get(cacheKey);
+  if (cachedRaster) return cachedRaster;
+
+  const width = grid.longitudes.length;
+  const height = grid.latitudes.length;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Could not create scenario raster canvas.");
+
+  const image = context.createImageData(width, height);
+  grid.values.forEach((row, latitudeIndex) => {
+    row.forEach((value, longitudeIndex) => {
+      if (value === null) return;
+      const color = isDifference
+        ? (isRainfall ? rainfallDiffColor(value) : temperatureDiffColor(value))
+        : (isRainfall ? rainfallColor(value) : temperatureColor(value));
+      const northUpRow = height - latitudeIndex - 1;
+      const pixelOffset = (northUpRow * width + longitudeIndex) * 4;
+      image.data[pixelOffset] = color[0];
+      image.data[pixelOffset + 1] = color[1];
+      image.data[pixelOffset + 2] = color[2];
+      image.data[pixelOffset + 3] = color[3];
+    });
+  });
+  context.putImageData(image, 0, 0);
+  const raster = canvas.toDataURL("image/png");
+  const cachedRasters = scenarioRasterCache.get(grid) ?? new Map<string, string>();
+  cachedRasters.set(cacheKey, raster);
+  scenarioRasterCache.set(grid, cachedRasters);
+  return raster;
+}
+
+function configureViewerScene(viewer: Cesium.Viewer) {
+  viewer.scene.globe.baseColor = Cesium.Color.BLACK;
+  viewer.scene.backgroundColor = Cesium.Color.BLACK;
+  viewer.scene.globe.enableLighting = false;
+  viewer.scene.globe.showGroundAtmosphere = true;
+  if (viewer.scene.skyAtmosphere) {
+    viewer.scene.skyAtmosphere.show = true;
+    viewer.scene.skyAtmosphere.brightnessShift = 0.05;
+    viewer.scene.skyAtmosphere.saturationShift = 0.1;
+  }
+  viewer.scene.globe.atmosphereLightIntensity = 10.0;
+  viewer.scene.globe.depthTestAgainstTerrain = false;
 }
 
 const initialCameraDestination = Cesium.Cartesian3.fromDegrees(
@@ -404,6 +485,7 @@ export default function App() {
   const stateLabelsPreferenceRef = useRef(true);
   const cityLabelsPreferenceRef = useRef(true);
   const searchControllerRef = useRef<AbortController | null>(null);
+
   const [viewerReady, setViewerReady] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<Location>({
     code: "IN",
@@ -411,60 +493,90 @@ export default function App() {
     region: "Indian subcontinent",
   });
   const selectedLocationRef = useRef(selectedLocation);
-  const [boundaryStatus, setBoundaryStatus] = useState("Loading boundaries");
   const [boundariesVisible, setBoundariesVisible] = useState(true);
   const [stateLabelsVisible, setStateLabelsVisible] = useState(true);
   const [cityLabelsVisible, setCityLabelsVisible] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(() => window.innerWidth > 900);
+  const [infoOpen, setInfoOpen] = useState(() => window.innerWidth > 640);
   const [viewMode, setViewMode] = useState<ViewMode>("historical");
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiStatusMessage, setApiStatusMessage] = useState("Checking climate API");
+
+  // Historical state
   const [rainfallSource, setRainfallSource] = useState<RainfallSource>("none");
-  const [temperatureSource, setTemperatureSource] =
-    useState<TemperatureSource>("none");
+  const [temperatureSource, setTemperatureSource] = useState<TemperatureSource>("none");
   const [rainfallDate, setRainfallDate] = useState("");
   const [imdDates, setImdDates] = useState<string[]>([]);
   const [rainfallGrid, setRainfallGrid] = useState<ImdRainfallGrid | null>(null);
-  const [temperatureDates, setTemperatureDates] = useState<
-    Record<"tmax" | "tmin", string[]>
-  >({ tmax: [], tmin: [] });
-  const [temperatureGrid, setTemperatureGrid] =
-    useState<ImdTemperatureGrid | null>(null);
+  const [temperatureDates, setTemperatureDates] = useState<Record<"tmax" | "tmin", string[]>>({
+    tmax: [],
+    tmin: [],
+  });
+  const [temperatureGrid, setTemperatureGrid] = useState<ImdTemperatureGrid | null>(null);
   const [temperatureLoading, setTemperatureLoading] = useState(false);
   const [temperatureError, setTemperatureError] = useState("");
-  const [predictionCatalog, setPredictionCatalog] =
-    useState<PredictionCatalog | null>(null);
+  const [rainfallLoading, setRainfallLoading] = useState(false);
+  const [rainfallError, setRainfallError] = useState("");
+  const [nasaAvailability, setNasaAvailability] = useState<NasaRainfallAvailability | null>(null);
+  const [nasaAvailabilityStatus, setNasaAvailabilityStatus] = useState<"checking" | "available" | "unavailable">("checking");
+  const [selectedRainfallCell, setSelectedRainfallCell] = useState<ImdRainfallCell | null>(null);
+  const [selectedTemperatureCell, setSelectedTemperatureCell] = useState<ImdTemperatureCell | null>(null);
+  const [rainfallCellStatus, setRainfallCellStatus] = useState<RainfallCellStatus>("idle");
+  const [rainfallCellError, setRainfallCellError] = useState("");
+
+  // AI Prediction state
+  const [predictionCatalog, setPredictionCatalog] = useState<PredictionCatalog | null>(null);
   const [predictionCatalogError, setPredictionCatalogError] = useState("");
-  const [predictionVariable, setPredictionVariable] =
-    useState<PredictionVariable>("rainfall");
+  const [predictionVariable, setPredictionVariable] = useState<PredictionVariable>("rainfall");
   const [predictionInitializationDate, setPredictionInitializationDate] = useState("");
   const [predictionGrid, setPredictionGrid] = useState<PredictionGrid | null>(null);
   const [predictionError, setPredictionError] = useState("");
-  const [selectedPredictionCell, setSelectedPredictionCell] =
-    useState<SelectedPredictionCell | null>(null);
-  const [rainfallLoading, setRainfallLoading] = useState(false);
-  const [rainfallError, setRainfallError] = useState("");
-  const [nasaAvailability, setNasaAvailability] =
-    useState<NasaRainfallAvailability | null>(null);
-  const [nasaAvailabilityStatus, setNasaAvailabilityStatus] =
-    useState<"checking" | "available" | "unavailable">("checking");
-  const [selectedRainfallCell, setSelectedRainfallCell] =
-    useState<ImdRainfallCell | null>(null);
-  const [selectedTemperatureCell, setSelectedTemperatureCell] =
-    useState<ImdTemperatureCell | null>(null);
-  const [rainfallCellStatus, setRainfallCellStatus] =
-    useState<RainfallCellStatus>("idle");
-  const [rainfallCellError, setRainfallCellError] = useState("");
+  const [predictionRequested, setPredictionRequested] = useState(false);
+  const [predictionRunAt, setPredictionRunAt] = useState<string | null>(null);
+  const [selectedPredictionCell, setSelectedPredictionCell] = useState<SelectedPredictionCell | null>(null);
+
+  // Live Mode state
+  const [liveWeatherRecords, setLiveWeatherRecords] = useState<StationWeatherRecord[]>([]);
+  const [liveWeatherLoading, setLiveWeatherLoading] = useState(false);
+  const [liveWeatherError, setLiveWeatherError] = useState("");
+  const [liveProviders, setLiveProviders] = useState<ProviderStatus[]>([]);
+  const [liveMetadataError, setLiveMetadataError] = useState("");
+  const [selectedLiveStation, setSelectedLiveStation] = useState<StationWeatherRecord | null>(null);
+  const [satelliteOverlayActive, setSatelliteOverlayActive] = useState(false);
+  const [satelliteLayersList, setSatelliteLayersList] = useState<SatelliteLayerInfo[]>([]);
+  const [selectedSatelliteLayerId, setSelectedSatelliteLayerId] = useState("true_color_terra");
+  const [satelliteDate, setSatelliteDate] = useState("");
+
+  // What-If Scenario state
+  const [scenarioScopesList, setScenarioScopesList] = useState<ScenarioScope[]>([
+    { code: "all_india", name: "All India (Nationwide Grid)" },
+  ]);
+  const [scenarioScopesError, setScenarioScopesError] = useState("");
+  const [scenarioScope, setScenarioScope] = useState("all_india");
+  const [scenarioBaselineSource, setScenarioBaselineSource] = useState<"historical" | "prediction">("historical");
+  const [scenarioBaselineDate, setScenarioBaselineDate] = useState("2025-07-15");
+  const [scenarioVarSelection, setScenarioVarSelection] = useState<"rainfall" | "temperature" | "both">("rainfall");
+  const [rainfallChangePct, setRainfallChangePct] = useState(20);
+  const [tmaxDelta, setTmaxDelta] = useState(2.0);
+  const [tminDelta, setTminDelta] = useState(1.5);
+  const [scenarioRunning, setScenarioRunning] = useState(false);
+  const [scenarioError, setScenarioError] = useState("");
+  const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null);
+  const [scenarioViewLayer, setScenarioViewLayer] = useState<"scenario" | "baseline" | "difference">("scenario");
+  const [scenarioActiveVar, setScenarioActiveVar] = useState<"rainfall" | "tmax" | "tmin">("rainfall");
+
+  // Place search
   const [placeQuery, setPlaceQuery] = useState("");
   const [placeResults, setPlaceResults] = useState<GeocodedPlace[]>([]);
   const [placeSearchError, setPlaceSearchError] = useState("");
   const [placeSearchBusy, setPlaceSearchBusy] = useState(false);
+
   const selectedPredictionModel = predictionCatalog?.models.find(
     (model) => model.variable === predictionVariable,
   );
   const predictionLoading = Boolean(
     viewMode === "forecast" &&
+      predictionRequested &&
       selectedPredictionModel?.available &&
       predictionInitializationDate &&
       !predictionGrid &&
@@ -472,6 +584,64 @@ export default function App() {
   );
   const predictionInitializationDates =
     selectedPredictionModel?.available_initialization_dates ?? [];
+  const scenarioTargetGrid = useMemo(() => {
+    if (!scenarioResult) return null;
+    if (scenarioActiveVar === "rainfall") {
+      return scenarioViewLayer === "difference"
+        ? scenarioResult.rainfall_difference_grid
+        : scenarioViewLayer === "baseline"
+          ? scenarioResult.rainfall_baseline_grid
+          : scenarioResult.rainfall_scenario_grid;
+    }
+    if (scenarioActiveVar === "tmax") {
+      return scenarioViewLayer === "difference"
+        ? scenarioResult.tmax_difference_grid
+        : scenarioViewLayer === "baseline"
+          ? scenarioResult.tmax_baseline_grid
+          : scenarioResult.tmax_scenario_grid;
+    }
+    return scenarioViewLayer === "difference"
+      ? scenarioResult.tmin_difference_grid
+      : scenarioViewLayer === "baseline"
+        ? scenarioResult.tmin_baseline_grid
+        : scenarioResult.tmin_scenario_grid;
+  }, [scenarioActiveVar, scenarioResult, scenarioViewLayer]);
+  const activeSatelliteLayer = useMemo(
+    () =>
+      viewMode === "live" && satelliteOverlayActive
+        ? satelliteLayersList.find((layer) => layer.layer_id === selectedSatelliteLayerId) ?? null
+        : null,
+    [satelliteLayersList, selectedSatelliteLayerId, satelliteOverlayActive, viewMode],
+  );
+  const activeScenarioGrid = viewMode === "whatif" ? scenarioTargetGrid : null;
+  const activePredictionGrid = viewMode === "forecast" ? predictionGrid : null;
+  const activeRainfallGrid =
+    viewMode === "historical" && rainfallSource === "imd" ? rainfallGrid : null;
+  const activeTemperatureGrid =
+    viewMode === "historical" && temperatureSource !== "none" ? temperatureGrid : null;
+  const activeNasaAvailability =
+    viewMode === "historical" &&
+    rainfallSource === "nasa" &&
+    nasaAvailability &&
+    isNasaDateAvailable(rainfallDate, nasaAvailability.available_time_intervals)
+      ? nasaAvailability
+      : null;
+  const activeSatelliteDate = activeSatelliteLayer
+    ? satelliteDate || activeSatelliteLayer.default_date
+    : null;
+  const activeHistoricalNasaDate = activeNasaAvailability ? rainfallDate : null;
+  const activeScenarioIsDifference =
+    viewMode === "whatif" && scenarioViewLayer === "difference";
+  const activeScenarioIsRainfall =
+    viewMode === "whatif" && scenarioActiveVar === "rainfall";
+
+  useEffect(() => {
+    const closeLayersOnNarrowViewport = () => {
+      if (window.innerWidth <= 900) setSettingsOpen(false);
+    };
+    window.addEventListener("resize", closeLayersOnNarrowViewport);
+    return () => window.removeEventListener("resize", closeLayersOnNarrowViewport);
+  }, []);
 
   useEffect(() => {
     rainfallSourceRef.current = rainfallSource;
@@ -483,7 +653,11 @@ export default function App() {
 
   const setViewerRef = useCallback((handle: ViewerHandle | null) => {
     viewerRef.current = handle;
-    if (handle?.cesiumElement) setViewerReady(true);
+    const viewer = handle?.cesiumElement;
+    if (viewer) {
+      configureViewerScene(viewer);
+      setViewerReady(true);
+    }
   }, []);
 
   const flyToIndia = useCallback(() => {
@@ -510,40 +684,21 @@ export default function App() {
     });
   }, []);
 
-  const flyToGlobalView = useCallback(() => {
-    const viewer = viewerRef.current?.cesiumElement;
-    if (!viewer) return;
-    setSelectedLocation({ code: "WORLD", name: "World", region: "Global view" });
-    setInfoOpen(false);
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(
-        GLOBAL_VIEW.longitude,
-        GLOBAL_VIEW.latitude,
-        GLOBAL_VIEW.height,
-      ),
-      orientation: {
-        heading: 0,
-        pitch: Cesium.Math.toRadians(-90),
-        roll: 0,
-      },
-      duration: 1.8,
-    });
-  }, []);
-
   const flyToMaharashtra = useCallback(() => {
     const viewer = viewerRef.current?.cesiumElement;
     if (!viewer) return;
-    const state = boundarySourceRef.current?.entities.values.find((entity) => {
-      const properties = entity.properties?.getValue(Cesium.JulianDate.now());
-      return properties?.iso_code === "IN-MH" || properties?.STATE_CODE === "IN-MH";
-    });
-
     setSelectedLocation({
       code: "IN-MH",
       name: "Maharashtra",
-      region: "West",
+      region: "Western India",
     });
-    setInfoOpen(true);
+    setInfoOpen(false);
+    const source = boundarySourceRef.current;
+    const state = source?.entities.values.find((entity) => {
+      const properties = entity.properties?.getValue(Cesium.JulianDate.now());
+      const code = properties?.iso_code ?? properties?.STATE_CODE ?? entity.id;
+      return code === "IN-MH";
+    });
     if (state) {
       void viewer.flyTo(state, {
         duration: 1.8,
@@ -551,7 +706,6 @@ export default function App() {
       });
       return;
     }
-
     viewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(
         MAHARASHTRA_VIEW.longitude,
@@ -567,160 +721,32 @@ export default function App() {
     });
   }, []);
 
-  const flyToPlace = useCallback((place: GeocodedPlace) => {
+  const flyToGlobalView = useCallback(() => {
     const viewer = viewerRef.current?.cesiumElement;
     if (!viewer) return;
-
-    if (place.extent) {
-      viewer.camera.flyTo({
-        destination: Cesium.Rectangle.fromDegrees(...place.extent),
-        duration: 1.8,
-      });
-    } else {
-      const placeKind = place.kind.toLowerCase();
-      const height = placeKind.includes("country")
-        ? 4_000_000
-        : placeKind.includes("state") || placeKind.includes("region")
-          ? 1_200_000
-          : 300_000;
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(
-          place.longitude,
-          place.latitude,
-          height,
-        ),
-        orientation: {
-          heading: 0,
-          pitch: Cesium.Math.toRadians(-62),
-          roll: 0,
-        },
-        duration: 1.8,
-      });
-    }
-
-    setSelectedLocation({
-      code: place.id ? `OSM ${place.id}` : "Search result",
-      name: place.name,
-      region: place.region,
+    setInfoOpen(false);
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(
+        GLOBAL_VIEW.longitude,
+        GLOBAL_VIEW.latitude,
+        GLOBAL_VIEW.height,
+      ),
+      orientation: {
+        heading: 0,
+        pitch: Cesium.Math.toRadians(-88),
+        roll: 0,
+      },
+      duration: 2.2,
     });
-    setInfoOpen(true);
-    setPlaceQuery(place.label);
-    setPlaceResults([]);
-    setPlaceSearchError("");
   }, []);
-
-  const inspectCoordinates = useCallback(
-    (latitude: number, longitude: number, preserveSelectedLocation = false) => {
-      if (!preserveSelectedLocation) {
-        setSelectedLocation({
-          code: `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`,
-          name: `${formatCoordinate(latitude, "N", "S")}, ${formatCoordinate(longitude, "E", "W")}`,
-          region: "Map coordinates",
-        });
-      }
-      setInfoOpen(true);
-      setSelectedRainfallCell(null);
-      setSelectedTemperatureCell(null);
-      setSelectedPredictionCell(null);
-      setRainfallCellError("");
-      rainfallCellControllerRef.current?.abort();
-
-      if (viewModeRef.current === "forecast") {
-        const grid = predictionGridRef.current;
-        if (!grid) {
-          setRainfallCellStatus("unavailable");
-          return;
-        }
-        if (
-          latitude < grid.latitudes[0] - grid.spatial_resolution_degrees / 2 ||
-          latitude > grid.latitudes[grid.latitudes.length - 1] +
-            grid.spatial_resolution_degrees / 2 ||
-          longitude < grid.longitudes[0] - grid.spatial_resolution_degrees / 2 ||
-          longitude > grid.longitudes[grid.longitudes.length - 1] +
-            grid.spatial_resolution_degrees / 2
-        ) {
-          setRainfallCellError("This location is outside the forecast grid.");
-          setRainfallCellStatus("error");
-          return;
-        }
-        const row = grid.latitudes.reduce(
-          (best, value, index) =>
-            Math.abs(value - latitude) < Math.abs(grid.latitudes[best] - latitude)
-              ? index
-              : best,
-          0,
-        );
-        const column = grid.longitudes.reduce(
-          (best, value, index) =>
-            Math.abs(value - longitude) < Math.abs(grid.longitudes[best] - longitude)
-              ? index
-              : best,
-          0,
-        );
-        setSelectedPredictionCell({
-          latitude: grid.latitudes[row],
-          longitude: grid.longitudes[column],
-          value: grid.values[row][column],
-        });
-        setRainfallCellStatus("idle");
-        return;
-      }
-
-      const source = rainfallSourceRef.current;
-      const temperature = temperatureSourceRef.current;
-      const observationDate = rainfallDateRef.current;
-      if (!observationDate) {
-        setRainfallCellStatus("unavailable");
-        return;
-      }
-
-      const controller = new AbortController();
-      rainfallCellControllerRef.current = controller;
-      setRainfallCellStatus("loading");
-      const cellRequest =
-        temperature === "tmax" || temperature === "tmin"
-          ? fetchImdTemperatureCell(
-              temperature,
-              observationDate,
-              latitude,
-              longitude,
-              controller.signal,
-            ).then((cell) => {
-              if (rainfallCellControllerRef.current !== controller) return;
-              setSelectedTemperatureCell(cell);
-              setRainfallCellStatus("idle");
-            })
-          : source === "imd"
-            ? fetchImdRainfallCell(
-                observationDate,
-                latitude,
-                longitude,
-                controller.signal,
-              ).then((cell) => {
-                if (rainfallCellControllerRef.current !== controller) return;
-                setSelectedRainfallCell(cell);
-                setRainfallCellStatus("idle");
-              })
-            : Promise.resolve().then(() => setRainfallCellStatus("unavailable"));
-      void cellRequest
-        .catch((error: unknown) => {
-          if (isAbortError(error)) return;
-          if (rainfallCellControllerRef.current !== controller) return;
-          setRainfallCellError(
-            error instanceof Error ? error.message : "Could not retrieve this grid cell.",
-          );
-          setRainfallCellStatus("error");
-        });
-    },
-    [],
-  );
 
   const selectRainfallSource = useCallback(
     (source: RainfallSource) => {
       rainfallCellControllerRef.current?.abort();
       setSelectedRainfallCell(null);
-      setRainfallCellStatus("idle");
+      setSelectedTemperatureCell(null);
       setRainfallCellError("");
+      setRainfallCellStatus("idle");
       setRainfallError("");
       setTemperatureError("");
       setRainfallGrid(null);
@@ -729,16 +755,13 @@ export default function App() {
       setTemperatureLoading(false);
       setRainfallSource(source);
       setTemperatureSource("none");
-      setSelectedTemperatureCell(null);
-      if (source === "imd" && imdDates.length > 0) {
-        setRainfallDate((current) =>
-          imdDates.includes(current) ? current : imdDates[imdDates.length - 1],
-        );
+      if (source === "imd" && imdDates.length > 0 && !imdDates.includes(rainfallDate)) {
+        setRainfallDate(imdDates[imdDates.length - 1]);
       } else if (source === "nasa" && nasaAvailability) {
         setRainfallDate(nasaAvailability.observation_date_end);
       }
     },
-    [imdDates, nasaAvailability, viewMode],
+    [imdDates, nasaAvailability, rainfallDate, viewMode],
   );
 
   const selectTemperatureSource = useCallback(
@@ -746,8 +769,8 @@ export default function App() {
       rainfallCellControllerRef.current?.abort();
       setSelectedRainfallCell(null);
       setSelectedTemperatureCell(null);
-      setRainfallCellStatus("idle");
       setRainfallCellError("");
+      setRainfallCellStatus("idle");
       setRainfallError("");
       setTemperatureError("");
       setRainfallGrid(null);
@@ -757,15 +780,13 @@ export default function App() {
       setRainfallSource("none");
       setTemperatureSource(source);
       if (source !== "none") {
-        const dates = temperatureDates[source];
-        if (dates.length > 0) {
-          setRainfallDate((current) =>
-            dates.includes(current) ? current : dates[dates.length - 1],
-          );
+        const availableDates = temperatureDates[source];
+        if (availableDates.length > 0 && !availableDates.includes(rainfallDate)) {
+          setRainfallDate(availableDates[availableDates.length - 1]);
         }
       }
     },
-    [temperatureDates, viewMode],
+    [rainfallDate, temperatureDates, viewMode],
   );
 
   const selectPredictionVariable = useCallback(
@@ -774,228 +795,566 @@ export default function App() {
       setPredictionGrid(null);
       setSelectedPredictionCell(null);
       setPredictionError("");
-      setRainfallCellStatus("idle");
-      setRainfallCellError("");
-      const model = predictionCatalog?.models.find((item) => item.variable === variable);
+      setPredictionRequested(false);
+      setPredictionRunAt(null);
+      const model = predictionCatalog?.models.find((candidate) => candidate.variable === variable);
       const dates = model?.available_initialization_dates ?? [];
-      if (dates.length > 0) setPredictionInitializationDate(dates[dates.length - 1]);
+      if (dates.length > 0) {
+        setPredictionInitializationDate(dates[dates.length - 1]);
+      }
     },
     [predictionCatalog],
   );
 
-  const submitPlaceSearch = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const query = placeQuery.trim();
-    if (query.length < 2) {
-      setPlaceResults([]);
-      setPlaceSearchError("Enter at least two characters to search.");
-      return;
-    }
+  // Setup viewer and scene
+  useEffect(() => {
+    const viewer = viewerRef.current?.cesiumElement;
+    if (!viewer) return;
 
-    searchControllerRef.current?.abort();
-    const controller = new AbortController();
-    searchControllerRef.current = controller;
-    setPlaceSearchBusy(true);
-    setPlaceSearchError("");
-
-    try {
-      const results = await searchPlaces(query, controller.signal);
-      setPlaceResults(results);
-      if (results.length === 0) setPlaceSearchError("No matching places found.");
-    } catch (error) {
-      if (isAbortError(error)) return;
-      console.error("Place search failed:", error);
-      setPlaceSearchError(
-        error instanceof Error ? error.message : "Place search failed unexpectedly.",
-      );
-    } finally {
-      if (searchControllerRef.current === controller) {
-        searchControllerRef.current = null;
-        setPlaceSearchBusy(false);
+    let cancelled = false;
+    const cleanupPan = setupPanDrag(viewer);
+    const updateBoundaryVisibility = () => {
+      const height = viewer.camera.positionCartographic.height;
+      const shouldShow = boundaryPreferenceRef.current && height <= STATE_BOUNDARY_MAX_HEIGHT;
+      if (boundarySourceRef.current && boundarySourceRef.current.show !== shouldShow) {
+        boundarySourceRef.current.show = shouldShow;
+        viewer.scene.requestRender();
       }
+    };
+    viewer.camera.changed.addEventListener(updateBoundaryVisibility);
+    updateBoundaryVisibility();
+
+    // Custom annotations data sources
+    const { stateLabelsSource, cityLabelsSource } = buildGeographicLabelsDataSources();
+    stateLabelsSourceRef.current = stateLabelsSource;
+    cityLabelsSourceRef.current = cityLabelsSource;
+    void Promise.all([
+      viewer.dataSources.add(stateLabelsSource),
+      viewer.dataSources.add(cityLabelsSource),
+    ]).catch((error: unknown) => {
+      if (!cancelled) console.error("Geographic label initialization failed:", error);
+    });
+
+    // Boundaries GeoJSON
+    void Cesium.GeoJsonDataSource.load("/india-states.geojson", {
+      stroke: Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.45),
+      fill: Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.015),
+      strokeWidth: 1,
+      clampToGround: false,
+    })
+      .then((source) => {
+        if (cancelled) {
+          source.entities.removeAll();
+          return;
+        }
+        boundarySourceRef.current = source;
+        source.show = boundaryPreferenceRef.current;
+        styleBoundaryEntities(source, selectedLocationRef.current.code);
+        return viewer.dataSources.add(source);
+      })
+      .then(() => {
+        if (cancelled) return;
+        viewer.scene.requestRender();
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        console.error("Boundary load failure:", error);
+      });
+
+    // Screen-space interaction handler
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    handler.setInputAction(
+      (movement: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
+        const position = viewer.camera.pickEllipsoid(
+          movement.position,
+          viewer.scene.globe.ellipsoid,
+        );
+        if (!position) return;
+        const cartographic = Cesium.Cartographic.fromCartesian(position);
+        const latitude = Cesium.Math.toDegrees(cartographic.latitude);
+        const longitude = Cesium.Math.toDegrees(cartographic.longitude);
+
+        const picked = viewer.scene.pick(movement.position);
+        if (Cesium.defined(picked) && picked.id) {
+          const entity = picked.id as Cesium.Entity;
+          const props = entity.properties?.getValue(Cesium.JulianDate.now());
+          const code = props?.iso_code ?? props?.STATE_CODE ?? entity.id;
+          const name = props?.state_name ?? props?.ST_NM ?? entity.name ?? "Indian Region";
+          const region = props?.REGION ?? props?.region ?? "Indian subcontinent";
+          setSelectedLocation({ code: String(code), name: String(name), region: String(region) });
+          setSettingsOpen(false);
+          setInfoOpen(true);
+        }
+
+        // Forecast Mode inspection
+        if (viewModeRef.current === "forecast") {
+          const grid = predictionGridRef.current;
+          if (!grid) return;
+          const latMin = grid.latitudes[0] - grid.spatial_resolution_degrees / 2;
+          const latMax = grid.latitudes[grid.latitudes.length - 1] + grid.spatial_resolution_degrees / 2;
+          const lonMin = grid.longitudes[0] - grid.spatial_resolution_degrees / 2;
+          const lonMax = grid.longitudes[grid.longitudes.length - 1] + grid.spatial_resolution_degrees / 2;
+          if (latitude < latMin || latitude > latMax || longitude < lonMin || longitude > lonMax) {
+            setRainfallCellError("This location is outside the forecast grid.");
+            setRainfallCellStatus("error");
+            return;
+          }
+          const controller = new AbortController();
+          rainfallCellControllerRef.current?.abort();
+          rainfallCellControllerRef.current = controller;
+          setRainfallCellStatus("loading");
+          void fetchPredictionCell(
+            grid.variable,
+            grid.initialization_date,
+            latitude,
+            longitude,
+            controller.signal,
+          )
+            .then((cell: { latitude: number; longitude: number; value: number | null; missing: boolean }) => {
+              setSelectedPredictionCell({
+                latitude: cell.latitude,
+                longitude: cell.longitude,
+                value: cell.value,
+                missing: cell.missing,
+              });
+              setRainfallCellStatus("idle");
+              setSettingsOpen(false);
+              setInfoOpen(true);
+            })
+            .catch((err: unknown) => {
+              if (controller.signal.aborted) return;
+              setRainfallCellError(err instanceof Error ? err.message : "Could not read forecast cell.");
+              setRainfallCellStatus("error");
+            });
+          return;
+        }
+
+        // Historical Mode inspection
+        if (viewModeRef.current === "historical") {
+          if (rainfallSourceRef.current === "imd" && rainfallDateRef.current) {
+            const controller = new AbortController();
+            rainfallCellControllerRef.current?.abort();
+            rainfallCellControllerRef.current = controller;
+            setRainfallCellStatus("loading");
+            void fetchImdRainfallCell(rainfallDateRef.current, latitude, longitude, controller.signal)
+              .then((cell) => {
+                setSelectedRainfallCell(cell);
+                setRainfallCellStatus("idle");
+                setSettingsOpen(false);
+                setInfoOpen(true);
+              })
+              .catch((err) => {
+                if (controller.signal.aborted) return;
+                setRainfallCellError(err instanceof Error ? err.message : "Could not inspect cell");
+                setRainfallCellStatus("error");
+              });
+          } else if (temperatureSourceRef.current !== "none" && rainfallDateRef.current) {
+            const controller = new AbortController();
+            rainfallCellControllerRef.current?.abort();
+            rainfallCellControllerRef.current = controller;
+            setRainfallCellStatus("loading");
+            void fetchImdTemperatureCell(
+              temperatureSourceRef.current,
+              rainfallDateRef.current,
+              latitude,
+              longitude,
+              controller.signal,
+            )
+              .then((cell) => {
+                setSelectedTemperatureCell(cell);
+                setRainfallCellStatus("idle");
+                setSettingsOpen(false);
+                setInfoOpen(true);
+              })
+              .catch((err) => {
+                if (controller.signal.aborted) return;
+                setRainfallCellError(err instanceof Error ? err.message : "Could not inspect cell");
+                setRainfallCellStatus("error");
+              });
+          }
+        }
+      },
+      Cesium.ScreenSpaceEventType.LEFT_CLICK,
+    );
+
+    return () => {
+      cancelled = true;
+      cleanupPan();
+      viewer.camera.changed.removeEventListener(updateBoundaryVisibility);
+      handler.destroy();
+      if (!viewer.isDestroyed()) {
+        for (const source of [
+          boundarySourceRef.current,
+          stateLabelsSourceRef.current,
+          cityLabelsSourceRef.current,
+        ]) {
+          if (source && viewer.dataSources.contains(source)) {
+            void viewer.dataSources.remove(source, true);
+          }
+        }
+      }
+      boundarySourceRef.current = null;
+      stateLabelsSourceRef.current = null;
+      cityLabelsSourceRef.current = null;
+    };
+  }, [viewerReady]);
+
+  // Initial load of background services
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchApiHealth(controller.signal)
+      .then((health) => {
+        setApiStatus(health.status === "healthy" ? "healthy" : "unavailable");
+        setApiStatusMessage(health.status === "healthy" ? "Climate API connected" : "API degraded");
+      })
+      .catch(() => {
+        setApiStatus("unavailable");
+        setApiStatusMessage("Backend API unreachable");
+      });
+
+    void fetchImdRainfallDates(controller.signal)
+      .then((payload) => {
+        setImdDates(payload.available_dates);
+        if (payload.available_dates.length > 0) {
+          setRainfallDate(payload.available_dates[payload.available_dates.length - 1]);
+          setScenarioBaselineDate(payload.available_dates[payload.available_dates.length - 1]);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setRainfallError(
+            error instanceof Error ? error.message : "Could not load available IMD rainfall dates.",
+          );
+        }
+      });
+
+    void fetchImdTemperatureDates("tmax", controller.signal).then((payload) => {
+      setTemperatureDates((prev) => ({ ...prev, tmax: payload.available_dates }));
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setTemperatureError(
+          error instanceof Error ? error.message : "Could not load available IMD Tmax dates.",
+        );
+      }
+    });
+
+    void fetchImdTemperatureDates("tmin", controller.signal).then((payload) => {
+      setTemperatureDates((prev) => ({ ...prev, tmin: payload.available_dates }));
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setTemperatureError(
+          error instanceof Error ? error.message : "Could not load available IMD Tmin dates.",
+        );
+      }
+    });
+
+    void fetchNasaRainfallAvailability(controller.signal).then((avail: NasaRainfallAvailability) => {
+      setNasaAvailability(avail);
+      setNasaAvailabilityStatus("available");
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      setNasaAvailabilityStatus("unavailable");
+      setRainfallError(
+        error instanceof Error ? error.message : "NASA GIBS rainfall imagery availability could not be checked.",
+      );
+    });
+
+    void fetchPredictionCatalog(controller.signal).then((cat) => {
+      setPredictionCatalog(cat);
+      const rainModel = cat.models.find((m) => m.variable === "rainfall");
+      if (rainModel?.available_initialization_dates?.length) {
+        setPredictionInitializationDate(
+          rainModel.available_initialization_dates[rainModel.available_initialization_dates.length - 1],
+        );
+      }
+    }).catch((err) => setPredictionCatalogError(err instanceof Error ? err.message : "Model catalog error"));
+
+    // Live data metadata
+    void fetchLiveStatus(controller.signal).then(setLiveProviders).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setLiveMetadataError(
+          error instanceof Error ? error.message : "Live provider status could not be loaded.",
+        );
+      }
+    });
+    void fetchSatelliteLayers(controller.signal).then((layers) => {
+      setSatelliteLayersList(layers);
+      if (layers.length > 0) {
+        setSatelliteDate((currentDate) => currentDate || layers[0].default_date);
+      }
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setLiveMetadataError(
+          error instanceof Error ? error.message : "Satellite layer information could not be loaded.",
+        );
+      }
+    });
+    void fetchScenarioScopes(controller.signal).then(setScenarioScopesList).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setScenarioScopesError(
+          error instanceof Error ? error.message : "Scenario geographic scopes could not be loaded.",
+        );
+      }
+    });
+
+    return () => controller.abort();
+  }, []);
+
+  // Refresh live weather every five minutes and cancel outstanding requests on mode changes.
+  useEffect(() => {
+    if (viewMode !== "live") return;
+
+    let activeController: AbortController | null = null;
+    const refreshLiveWeather = async () => {
+      if (activeController) return;
+      const controller = new AbortController();
+      activeController = controller;
+      setLiveWeatherLoading(true);
+      setLiveWeatherError("");
+      try {
+        const records = await fetchLiveWeather(undefined, undefined, controller.signal);
+        setLiveWeatherRecords(records);
+        setSelectedLiveStation((selected) =>
+          selected
+            ? records.find((record) => record.location_id === selected.location_id) ?? null
+            : null,
+        );
+        try {
+          setLiveProviders(await fetchLiveStatus(controller.signal));
+          setLiveMetadataError("");
+        } catch (error: unknown) {
+          if (!controller.signal.aborted) {
+            setLiveMetadataError(
+              error instanceof Error ? error.message : "Live provider status could not be refreshed.",
+            );
+          }
+        }
+      } catch (error: unknown) {
+        if (!controller.signal.aborted) {
+          setLiveWeatherError(
+            error instanceof Error ? error.message : "Could not load the latest available weather data.",
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLiveWeatherLoading(false);
+          activeController = null;
+        }
+      }
+    };
+
+    void refreshLiveWeather();
+    const refreshTimer = window.setInterval(() => {
+      void refreshLiveWeather();
+    }, 5 * 60 * 1000);
+    return () => {
+      window.clearInterval(refreshTimer);
+      activeController?.abort();
+    };
+  }, [viewMode]);
+
+  // Historical Grid fetching
+  useEffect(() => {
+    if (viewMode !== "historical") return;
+    if (rainfallSource === "imd" && rainfallDate) {
+      const controller = new AbortController();
+      void fetchImdRainfallGrid(rainfallDate, controller.signal)
+        .then((grid) => {
+          setRainfallGrid(grid);
+          setRainfallLoading(false);
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return;
+          setRainfallError(err instanceof Error ? err.message : "Could not load IMD rainfall grid.");
+          setRainfallLoading(false);
+        });
+      return () => controller.abort();
     }
-  }, [placeQuery]);
+    if ((temperatureSource === "tmax" || temperatureSource === "tmin") && rainfallDate) {
+      const controller = new AbortController();
+      void fetchImdTemperatureGrid(temperatureSource, rainfallDate, controller.signal)
+        .then((grid) => {
+          setTemperatureGrid(grid);
+          setTemperatureLoading(false);
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return;
+          setTemperatureError(err instanceof Error ? err.message : "Could not load IMD temperature grid.");
+          setTemperatureLoading(false);
+        });
+      return () => controller.abort();
+    }
+  }, [rainfallDate, rainfallSource, temperatureSource, viewMode]);
 
+  // AI Prediction Grid fetching
+  useEffect(() => {
+    if (viewMode !== "forecast" || !predictionRequested) return;
+    if (!selectedPredictionModel?.available || !predictionInitializationDate) return;
+    const controller = new AbortController();
+    void fetchPredictionGrid(predictionVariable, predictionInitializationDate, controller.signal)
+      .then((grid) => {
+        setPredictionGrid(grid);
+        setPredictionRunAt(new Date().toISOString());
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setPredictionError(err instanceof Error ? err.message : "Failed to load forecast grid.");
+        setPredictionRequested(false);
+      });
+    return () => controller.abort();
+  }, [
+    predictionInitializationDate,
+    predictionRequested,
+    predictionVariable,
+    selectedPredictionModel,
+    viewMode,
+  ]);
 
-
+  // Main Cesium Raster Overlay Manager (handles Historical, Live Satellite, Prediction, and What-If)
   useEffect(() => {
     const viewer = viewerRef.current?.cesiumElement;
     if (!viewerReady || !viewer) return;
 
-    const removeCursorZoom = configureViewerScene(viewer);
+    let cancelled = false;
+    let addedLayer: Cesium.ImageryLayer | undefined;
 
-    let active = true;
-    let removeSelectionListener: (() => void) | undefined;
-    let removeCameraListener: (() => void) | undefined;
-    let coordinatePicker: Cesium.ScreenSpaceEventHandler | undefined;
+    const previousLayer = rainfallLayerRef.current;
+    if (previousLayer) {
+      viewer.imageryLayers.remove(previousLayer, true);
+      rainfallLayerRef.current = null;
+    }
 
-    const loadBoundariesAndLabels = async () => {
-      try {
-        const source = await loadIndiaBoundaries();
-        if (!active) return;
-        if (!viewer.dataSources.contains(source)) {
-          await viewer.dataSources.add(source);
-        }
-        boundarySourceRef.current = source;
-        styleBoundaryEntities(source, selectedLocationRef.current.code);
-
-        const { stateLabelsSource, cityLabelsSource } = buildGeographicLabelsDataSources();
-        if (!active) return;
-        if (!viewer.dataSources.contains(stateLabelsSource)) {
-          await viewer.dataSources.add(stateLabelsSource);
-        }
-        if (!viewer.dataSources.contains(cityLabelsSource)) {
-          await viewer.dataSources.add(cityLabelsSource);
-        }
-        stateLabelsSourceRef.current = stateLabelsSource;
-        cityLabelsSourceRef.current = cityLabelsSource;
-
-        stateLabelsSource.show = stateLabelsPreferenceRef.current;
-        cityLabelsSource.show = cityLabelsPreferenceRef.current;
-
-        const onSelectionChanged = (selected: Cesium.Entity | undefined) => {
-          if (!selected?.properties) return;
-          const properties = selected.properties.getValue(Cesium.JulianDate.now());
-          const kind = properties?.kind;
-
-          if (kind === "city-label") {
-            const cityName = properties?.cityName ?? selected.name;
-            const stateName = properties?.state_name ?? "";
-            setSelectedLocation({
-              code: `CITY-${String(cityName).toUpperCase().replace(/\s+/g, "_")}`,
-              name: String(cityName),
-              region: `${stateName}, India`,
-            });
-            setInfoOpen(true);
-            return;
-          }
-
-          const code = properties?.iso_code ?? properties?.STATE_CODE ?? selected.id;
-          const name =
-            properties?.state_name ??
-            properties?.STATE_NAME ??
-            properties?.ST_NM ??
-            selected.name ??
-            "Selected state";
-          const region = properties?.REGION ?? properties?.region ?? "India";
-          if (typeof code === "string") {
-            setSelectedLocation({
-              code,
-              name: String(name),
-              region: String(region),
-            });
-            setInfoOpen(true);
-          }
-        };
-        viewer.selectedEntityChanged.addEventListener(onSelectionChanged);
-        removeSelectionListener = () =>
-          viewer.selectedEntityChanged.removeEventListener(onSelectionChanged);
-
-        const updateBoundaryScale = () => {
-          source.show =
-            boundaryPreferenceRef.current &&
-            viewer.camera.positionCartographic.height <= STATE_BOUNDARY_MAX_HEIGHT;
-          viewer.scene.requestRender();
-        };
-        viewer.camera.moveEnd.addEventListener(updateBoundaryScale);
-        removeCameraListener = () =>
-          viewer.camera.moveEnd.removeEventListener(updateBoundaryScale);
-
-        coordinatePicker = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-        coordinatePicker.setInputAction(
-          (movement: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-            const position = viewer.camera.pickEllipsoid(
-              movement.position,
-              viewer.scene.globe.ellipsoid,
-            );
-            if (!position) return;
-            const coordinate = Cesium.Cartographic.fromCartesian(position);
-            const latitude = Cesium.Math.toDegrees(coordinate.latitude);
-            const longitude = Cesium.Math.toDegrees(coordinate.longitude);
-            const picked = viewer.scene.pick(movement.position);
-            inspectCoordinates(
-              latitude,
-              longitude,
-              picked?.id instanceof Cesium.Entity,
-            );
-          },
-          Cesium.ScreenSpaceEventType.LEFT_CLICK,
+    const applyLayer = async () => {
+      // 1. Live Satellite Overlay Mode
+      if (viewMode === "live" && activeSatelliteLayer && activeSatelliteDate) {
+        const provider = createGibsSatelliteProvider(
+          activeSatelliteLayer.layer_name,
+          activeSatelliteDate,
+          activeSatelliteLayer.format,
         );
-        coordinatePicker.setInputAction(
-          (movement: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-            const position = viewer.camera.pickEllipsoid(
-              movement.position,
-              viewer.scene.globe.ellipsoid,
-            );
-            if (!position) return;
-            const coordinate = Cesium.Cartographic.fromCartesian(position);
-            const latitude = Cesium.Math.toDegrees(coordinate.latitude);
-            const longitude = Cesium.Math.toDegrees(coordinate.longitude);
-            inspectCoordinates(latitude, longitude);
-            const height = Cesium.Math.clamp(
-              viewer.camera.positionCartographic.height * 0.45,
-              120_000,
-              2_500_000,
-            );
-            viewer.camera.flyTo({
-              destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, height),
-              orientation: {
-                heading: viewer.camera.heading,
-                pitch: Cesium.Math.toRadians(-65),
-                roll: 0,
-              },
-              duration: 1.2,
-            });
-          },
-          Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK,
-        );
-        viewer.screenSpaceEventHandler.removeInputAction(
-          Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK,
-        );
+        addedLayer = viewer.imageryLayers.addImageryProvider(provider);
+        addedLayer.alpha = activeSatelliteLayer.opacity_default || 0.75;
+      }
 
-        updateBoundaryScale();
+      // 2. What-If Scenario Mode
+      else if (viewMode === "whatif" && activeScenarioGrid) {
+          const image = createScenarioCompactRaster(
+            activeScenarioGrid,
+            activeScenarioIsDifference,
+            activeScenarioIsRainfall,
+          );
+          const res = activeScenarioGrid.spatial_resolution_degrees;
+          const provider = await Cesium.SingleTileImageryProvider.fromUrl(image, {
+            rectangle: Cesium.Rectangle.fromDegrees(
+              activeScenarioGrid.longitudes[0] - res / 2,
+              activeScenarioGrid.latitudes[0] - res / 2,
+              activeScenarioGrid.longitudes[activeScenarioGrid.longitudes.length - 1] + res / 2,
+              activeScenarioGrid.latitudes[activeScenarioGrid.latitudes.length - 1] + res / 2,
+            ),
+          });
+          if (cancelled) return;
+          addedLayer = viewer.imageryLayers.addImageryProvider(provider);
+          addedLayer.alpha = 0.84;
+      }
+
+      // 3. AI Prediction Mode
+      else if (viewMode === "forecast" && activePredictionGrid) {
+        const image = createPredictionRaster(activePredictionGrid);
+        const resolution = activePredictionGrid.spatial_resolution_degrees;
+        const provider = await Cesium.SingleTileImageryProvider.fromUrl(image, {
+          rectangle: Cesium.Rectangle.fromDegrees(
+            activePredictionGrid.longitudes[0] - resolution / 2,
+            activePredictionGrid.latitudes[0] - resolution / 2,
+            activePredictionGrid.longitudes[activePredictionGrid.longitudes.length - 1] + resolution / 2,
+            activePredictionGrid.latitudes[activePredictionGrid.latitudes.length - 1] + resolution / 2,
+          ),
+        });
+        if (cancelled) return;
+        addedLayer = viewer.imageryLayers.addImageryProvider(provider);
+        addedLayer.alpha = 0.84;
+      }
+
+      // 4. Historical Observation Mode
+      else if (viewMode === "historical") {
+        if (activeRainfallGrid) {
+          const image = createRainfallRaster(activeRainfallGrid);
+          const provider = await Cesium.SingleTileImageryProvider.fromUrl(image, {
+            rectangle: Cesium.Rectangle.fromDegrees(66.375, 6.375, 100.125, 38.625),
+          });
+          if (cancelled) return;
+          addedLayer = viewer.imageryLayers.addImageryProvider(provider);
+          addedLayer.alpha = 0.84;
+        } else if (activeTemperatureGrid) {
+          const image = createTemperatureRaster(activeTemperatureGrid);
+          const provider = await Cesium.SingleTileImageryProvider.fromUrl(image, {
+            rectangle: Cesium.Rectangle.fromDegrees(67, 7, 98, 38),
+          });
+          if (cancelled) return;
+          addedLayer = viewer.imageryLayers.addImageryProvider(provider);
+          addedLayer.alpha = 0.82;
+        } else if (
+          activeNasaAvailability &&
+          activeHistoricalNasaDate
+        ) {
+          const provider = new Cesium.WebMapServiceImageryProvider({
+            url: activeNasaAvailability.imagery_service,
+            layers: activeNasaAvailability.layer,
+            parameters: {
+              format: "image/png",
+              transparent: "true",
+              time: activeHistoricalNasaDate,
+            },
+            tilingScheme: new Cesium.GeographicTilingScheme(),
+            enablePickFeatures: false,
+            credit: activeNasaAvailability.attribution,
+          });
+          addedLayer = viewer.imageryLayers.addImageryProvider(provider);
+          addedLayer.alpha = 0.88;
+        }
+      }
+
+      if (addedLayer) {
+        rainfallLayerRef.current = addedLayer;
         viewer.scene.requestRender();
-        setBoundaryStatus("State boundaries and labels ready");
-      } catch (error) {
-        console.error("Failed to load India state boundaries and labels:", error);
-        if (active) setBoundaryStatus("Boundary data unavailable");
       }
     };
 
-    void loadBoundariesAndLabels();
+    void applyLayer().catch((err: unknown) => {
+      if (cancelled) return;
+      console.error("Imagery layer application error:", err);
+    });
+
     return () => {
-      active = false;
-      removeSelectionListener?.();
-      removeCameraListener?.();
-      coordinatePicker?.destroy();
-      removeCursorZoom();
-      if (
-        stateLabelsSourceRef.current &&
-        viewer.dataSources.contains(stateLabelsSourceRef.current)
-      ) {
-        viewer.dataSources.remove(stateLabelsSourceRef.current, true);
-        stateLabelsSourceRef.current = null;
-      }
-      if (
-        cityLabelsSourceRef.current &&
-        viewer.dataSources.contains(cityLabelsSourceRef.current)
-      ) {
-        viewer.dataSources.remove(cityLabelsSourceRef.current, true);
-        cityLabelsSourceRef.current = null;
-      }
+      cancelled = true;
+      if (addedLayer) viewer.imageryLayers.remove(addedLayer, true);
+      if (rainfallLayerRef.current === addedLayer) rainfallLayerRef.current = null;
     };
-  }, [inspectCoordinates, viewerReady]);
+  }, [
+    viewMode,
+    activeSatelliteLayer,
+    activeSatelliteDate,
+    activeScenarioGrid,
+    activeScenarioIsDifference,
+    activeScenarioIsRainfall,
+    activePredictionGrid,
+    activeRainfallGrid,
+    activeTemperatureGrid,
+    activeNasaAvailability,
+    activeHistoricalNasaDate,
+    viewerReady,
+  ]);
 
+  // Boundaries & Labels toggle listeners
   useEffect(() => {
     boundaryPreferenceRef.current = boundariesVisible;
     const viewer = viewerRef.current?.cesiumElement;
-    if (viewer && boundarySourceRef.current) {
-      boundarySourceRef.current.show =
-        boundariesVisible &&
-        viewer.camera.positionCartographic.height <= STATE_BOUNDARY_MAX_HEIGHT;
+    if (!viewer) return;
+    const height = viewer.camera.positionCartographic.height;
+    if (boundarySourceRef.current) {
+      boundarySourceRef.current.show = boundariesVisible && height <= STATE_BOUNDARY_MAX_HEIGHT;
       viewer.scene.requestRender();
     }
-  }, [boundariesVisible, boundaryStatus]);
+  }, [boundariesVisible]);
 
   useEffect(() => {
     stateLabelsPreferenceRef.current = stateLabelsVisible;
@@ -1013,319 +1372,121 @@ export default function App() {
     }
   }, [cityLabelsVisible]);
 
-  useEffect(() => {
-    selectedLocationRef.current = selectedLocation;
-    const source = boundarySourceRef.current;
-    if (!source) return;
-    styleBoundaryEntities(source, selectedLocation.code);
-    viewerRef.current?.cesiumElement?.scene.requestRender();
-  }, [selectedLocation, boundaryStatus]);
-
-
-  useEffect(() => {
+  // Place search submit
+  const submitPlaceSearch = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!placeQuery.trim()) return;
+    searchControllerRef.current?.abort();
     const controller = new AbortController();
-    void fetchApiHealth(controller.signal)
-      .then(({ status }) => {
-        setApiStatus(status === "healthy" ? "healthy" : "unavailable");
-        setApiStatusMessage(
-          status === "healthy" ? "Backend health endpoint is healthy" : `Backend status: ${status}`,
-        );
-      })
-      .catch((error: unknown) => {
-        if (isAbortError(error)) return;
-        console.error("Climate API health check failed:", error);
-        setApiStatus("unavailable");
-        setApiStatusMessage(
-          error instanceof Error ? error.message : "Climate API health check failed.",
-        );
-      });
-    return () => controller.abort();
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-    void fetchImdRainfallDates(controller.signal)
-      .then((response) => {
-        if (!active) return;
-        setImdDates(response.available_dates);
-        if (response.available_dates.length === 0) {
-          setRainfallError("No IMD rainfall files are installed on the backend.");
-          return;
-        }
-        const latestDate = response.available_dates[response.available_dates.length - 1];
-        setRainfallDate(latestDate);
-        setRainfallLoading(true);
-        setRainfallSource("imd");
-      })
-      .catch((error: unknown) => {
-        if (isAbortError(error)) return;
-        console.error("Could not load IMD rainfall dates:", error);
-        if (active) {
-          setRainfallError(
-            error instanceof Error ? error.message : "IMD rainfall dates are unavailable.",
-          );
-        }
-      });
-    void fetchNasaRainfallAvailability(controller.signal)
-      .then((availability) => {
-        if (!active) return;
-        setNasaAvailability(availability);
-        setNasaAvailabilityStatus("available");
-      })
-      .catch((error: unknown) => {
-        if (isAbortError(error)) return;
-        console.error("Could not load NASA GIBS availability:", error);
-        if (active) setNasaAvailabilityStatus("unavailable");
-      });
-    for (const variable of ["tmax", "tmin"] as const) {
-      void fetchImdTemperatureDates(variable, controller.signal)
-        .then((response) => {
-          if (!active) return;
-          setTemperatureDates((current) => ({
-            ...current,
-            [variable]: response.available_dates,
-          }));
-        })
-        .catch((error: unknown) => {
-          if (isAbortError(error)) return;
-          console.error(`Could not load IMD ${variable} dates:`, error);
-          if (active) {
-            setTemperatureError(
-              error instanceof Error ? error.message : `IMD ${variable} dates are unavailable.`,
-            );
-          }
-        });
+    searchControllerRef.current = controller;
+    setPlaceSearchBusy(true);
+    setPlaceSearchError("");
+    try {
+      const results = await searchPlaces(placeQuery, controller.signal);
+      setPlaceResults(results);
+      if (results.length === 0) setPlaceSearchError("No places matching that name were found.");
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return;
+      setPlaceSearchError(err instanceof Error ? err.message : "Search failed");
+    } finally {
+      setPlaceSearchBusy(false);
     }
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, []);
+  };
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchPredictionCatalog(controller.signal)
-      .then((catalog) => {
-        setPredictionCatalog(catalog);
-        const rainfallModel = catalog.models.find(
-          (model) => model.variable === "rainfall" && model.available,
-        );
-        const dates = rainfallModel?.available_initialization_dates ?? [];
-        if (dates.length > 0) setPredictionInitializationDate(dates[dates.length - 1]);
-      })
-      .catch((error: unknown) => {
-        if (isAbortError(error)) return;
-        console.error("Could not load climate prediction models:", error);
-        setPredictionCatalogError(
-          error instanceof Error ? error.message : "Climate prediction models are unavailable.",
-        );
-      });
-    return () => controller.abort();
-  }, []);
-
-  useEffect(() => {
-    if (
-      (temperatureSource !== "tmax" && temperatureSource !== "tmin") ||
-      !rainfallDate ||
-      viewMode !== "historical"
-    ) {
-      return;
-    }
-
-    const controller = new AbortController();
-    void fetchImdTemperatureGrid(temperatureSource, rainfallDate, controller.signal)
-      .then((grid) => setTemperatureGrid(grid))
-      .catch((error: unknown) => {
-        if (isAbortError(error)) return;
-        console.error(`Could not load IMD ${temperatureSource} grid:`, error);
-        setTemperatureError(
-          error instanceof Error
-            ? error.message
-            : `IMD ${temperatureSource} grid is unavailable.`,
-        );
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setTemperatureLoading(false);
-      });
-    return () => controller.abort();
-  }, [rainfallDate, temperatureSource, viewMode]);
-
-  useEffect(() => {
-    if (viewMode !== "forecast") return;
-    if (!selectedPredictionModel?.available || !predictionInitializationDate) return;
-
-    const controller = new AbortController();
-    void fetchPredictionGrid(
-      predictionVariable,
-      predictionInitializationDate,
-      controller.signal,
-    )
-      .then((grid) => setPredictionGrid(grid))
-      .catch((error: unknown) => {
-        if (isAbortError(error)) return;
-        console.error(`Could not load the ${predictionVariable} prediction:`, error);
-        setPredictionGrid(null);
-        setPredictionError(
-          error instanceof Error
-            ? error.message
-            : `The ${predictionVariable} prediction is unavailable.`,
-        );
-      });
-    return () => controller.abort();
-  }, [
-    predictionInitializationDate,
-    predictionVariable,
-    selectedPredictionModel,
-    viewMode,
-  ]);
-
-  useEffect(() => {
-    if (rainfallSource !== "imd" || !rainfallDate || viewMode !== "historical") {
-      return;
-    }
-
-    const controller = new AbortController();
-    void fetchImdRainfallGrid(rainfallDate, controller.signal)
-      .then((grid) => setRainfallGrid(grid))
-      .catch((error: unknown) => {
-        if (isAbortError(error)) return;
-        console.error("Could not load IMD rainfall grid:", error);
-        setRainfallError(
-          error instanceof Error ? error.message : "IMD rainfall grid is unavailable.",
-        );
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setRainfallLoading(false);
-      });
-    return () => controller.abort();
-  }, [rainfallDate, rainfallSource, viewMode]);
-
-  useEffect(() => {
+  const flyToPlace = (place: GeocodedPlace) => {
     const viewer = viewerRef.current?.cesiumElement;
-    if (!viewerReady || !viewer) return;
-
-    let cancelled = false;
-    let addedLayer: Cesium.ImageryLayer | undefined;
-    const previousLayer = rainfallLayerRef.current;
-    if (previousLayer) {
-      viewer.imageryLayers.remove(previousLayer, true);
-      rainfallLayerRef.current = null;
-    }
-
-    const addRainfallLayer = async () => {
-      if (viewMode === "forecast" && predictionGrid) {
-        const image = createPredictionRaster(predictionGrid);
-        const resolution = predictionGrid.spatial_resolution_degrees;
-        const provider = await Cesium.SingleTileImageryProvider.fromUrl(image, {
-          rectangle: Cesium.Rectangle.fromDegrees(
-            predictionGrid.longitudes[0] - resolution / 2,
-            predictionGrid.latitudes[0] - resolution / 2,
-            predictionGrid.longitudes[predictionGrid.longitudes.length - 1] +
-              resolution / 2,
-            predictionGrid.latitudes[predictionGrid.latitudes.length - 1] +
-              resolution / 2,
-          ),
-        });
-        if (cancelled) return;
-        addedLayer = viewer.imageryLayers.addImageryProvider(provider);
-        addedLayer.alpha = 0.84;
-      } else if (viewMode !== "historical") {
-        return;
-      }
-      if (viewMode === "forecast" && addedLayer) {
-        rainfallLayerRef.current = addedLayer;
-        viewer.scene.requestRender();
-        return;
-      }
-      if (rainfallSource === "imd" && rainfallGrid) {
-        const image = createRainfallRaster(rainfallGrid);
-        const provider = await Cesium.SingleTileImageryProvider.fromUrl(image, {
-          rectangle: Cesium.Rectangle.fromDegrees(66.375, 6.375, 100.125, 38.625),
-        });
-        if (cancelled) return;
-        addedLayer = viewer.imageryLayers.addImageryProvider(provider);
-        addedLayer.alpha = 0.84;
-      } else if (
-        (temperatureSource === "tmax" || temperatureSource === "tmin") &&
-        temperatureGrid
-      ) {
-        const image = createTemperatureRaster(temperatureGrid);
-        const provider = await Cesium.SingleTileImageryProvider.fromUrl(image, {
-          rectangle: Cesium.Rectangle.fromDegrees(67, 7, 98, 38),
-        });
-        if (cancelled) return;
-        addedLayer = viewer.imageryLayers.addImageryProvider(provider);
-        addedLayer.alpha = 0.82;
-      } else if (
-        rainfallSource === "nasa" &&
-        nasaAvailability &&
-        rainfallDate >= nasaAvailability.observation_date_start &&
-        rainfallDate <= nasaAvailability.observation_date_end
-      ) {
-        const provider = new Cesium.WebMapServiceImageryProvider({
-          url: nasaAvailability.imagery_service,
-          layers: nasaAvailability.layer,
-          parameters: {
-            format: "image/png",
-            transparent: "true",
-            time: rainfallDate,
-          },
-          tilingScheme: new Cesium.GeographicTilingScheme(),
-          enablePickFeatures: false,
-          credit: nasaAvailability.attribution,
-        });
-        addedLayer = viewer.imageryLayers.addImageryProvider(provider);
-        addedLayer.alpha = 0.88;
-      }
-      if (addedLayer) {
-        rainfallLayerRef.current = addedLayer;
-        viewer.scene.requestRender();
-      }
-    };
-
-    void addRainfallLayer().catch((error: unknown) => {
-      if (cancelled) return;
-      console.error("Could not create the Cesium rainfall layer:", error);
-      setRainfallError(
-        error instanceof Error ? error.message : "Could not display the rainfall layer.",
-      );
+    if (!viewer) return;
+    setSelectedLocation({ code: place.id ?? "SEARCH", name: place.name, region: place.region });
+    setSettingsOpen(false);
+    setInfoOpen(true);
+    setPlaceResults([]);
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(place.longitude, place.latitude, 450_000),
+      orientation: { heading: 0, pitch: Cesium.Math.toRadians(-75), roll: 0 },
+      duration: 2.0,
     });
-    return () => {
-      cancelled = true;
-      if (addedLayer) viewer.imageryLayers.remove(addedLayer, true);
-      if (rainfallLayerRef.current === addedLayer) rainfallLayerRef.current = null;
-    };
+  };
+
+  const handleSelectLiveStation = useCallback((st: StationWeatherRecord) => {
+    setSelectedLiveStation(st);
+    setSettingsOpen(false);
+    setInfoOpen(true);
+    setSelectedLocation({
+      code: st.state_code,
+      name: st.location_name,
+      region: st.state,
+    });
+    setInfoOpen(true);
+    const viewer = viewerRef.current?.cesiumElement;
+    if (viewer) {
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude, 850_000),
+        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-75), roll: 0 },
+        duration: 1.6,
+      });
+    }
+  }, []);
+
+  const handleRunScenario = useCallback(async () => {
+    setScenarioRunning(true);
+    setScenarioError("");
+    setScenarioResult(null);
+    try {
+      const res = await runClimateScenario({
+        scenario_name: `${scenarioScope === "all_india" ? "All-India" : scenarioScope} Perturbation`,
+        geographic_scope: scenarioScope,
+        baseline_source: scenarioBaselineSource,
+        baseline_date: scenarioBaselineDate,
+        variable_selection: scenarioVarSelection,
+        rainfall_change_percent: rainfallChangePct,
+        tmax_delta: tmaxDelta,
+        tmin_delta: tminDelta,
+      });
+      setScenarioResult(res);
+      if (scenarioVarSelection === "temperature") {
+        setScenarioActiveVar("tmax");
+      } else {
+        setScenarioActiveVar("rainfall");
+      }
+    } catch (err: unknown) {
+      setScenarioError(err instanceof Error ? err.message : "Failed to run What-If scenario.");
+    } finally {
+      setScenarioRunning(false);
+    }
   }, [
-    nasaAvailability,
-    rainfallDate,
-    rainfallGrid,
-    rainfallSource,
-    predictionGrid,
-    temperatureGrid,
-    temperatureSource,
-    viewerReady,
-    viewMode,
+    scenarioScope,
+    scenarioBaselineSource,
+    scenarioBaselineDate,
+    scenarioVarSelection,
+    rainfallChangePct,
+    tmaxDelta,
+    tminDelta,
   ]);
 
-  useEffect(
-    () => () => {
-      searchControllerRef.current?.abort();
-      rainfallCellControllerRef.current?.abort();
-    },
-    [],
-  );
+  const handleResetScenario = useCallback(() => {
+    setRainfallChangePct(0);
+    setTmaxDelta(0);
+    setTminDelta(0);
+    setScenarioResult(null);
+    setScenarioError("");
+  }, []);
 
   return (
-    <main className="earth-app">
+    <main
+      className={`earth-app mode-${viewMode}${infoOpen || settingsOpen ? " side-panel-open" : ""}${settingsOpen ? " layers-open" : ""}`}
+    >
       <ClimateGlobe onViewerReady={setViewerRef} />
 
+      {/* Top Header */}
       <header className="top-overlay">
         <div className="brand-lockup">
           <span className="brand-mark"><span /></span>
           <div>
             <p className="brand-name">INDIA CLIMATE TWIN</p>
-            <p className="location-line">{selectedLocation.name}<span> / {selectedLocation.region}</span></p>
+            <p className="location-line">
+              {selectedLocation.name}
+              <span> / {selectedLocation.region}</span>
+            </p>
           </div>
         </div>
 
@@ -1333,6 +1494,7 @@ export default function App() {
           <div className="mode-switch" aria-label="Application mode">
             <button
               type="button"
+              aria-pressed={viewMode === "historical"}
               className={viewMode === "historical" ? "selected" : ""}
               onClick={() => {
                 setRainfallGrid(null);
@@ -1340,16 +1502,39 @@ export default function App() {
                 setPredictionGrid(null);
                 setSelectedPredictionCell(null);
                 setPredictionError("");
+                setPredictionRequested(false);
+                setPredictionRunAt(null);
                 setRainfallLoading(rainfallSource === "imd");
                 setTemperatureLoading(temperatureSource !== "none");
+                setSettingsOpen(false);
+                setInfoOpen(true);
                 setViewMode("historical");
               }}
             >
-              Observation
+              Historical
             </button>
-            <span />
             <button
               type="button"
+              aria-pressed={viewMode === "live"}
+              className={viewMode === "live" ? "selected" : ""}
+              onClick={() => {
+                setRainfallGrid(null);
+                setTemperatureGrid(null);
+                setPredictionGrid(null);
+                setSelectedPredictionCell(null);
+                setPredictionError("");
+                setPredictionRequested(false);
+                setPredictionRunAt(null);
+                setSettingsOpen(false);
+                setInfoOpen(true);
+                setViewMode("live");
+              }}
+            >
+              Live
+            </button>
+            <button
+              type="button"
+              aria-pressed={viewMode === "forecast"}
               className={viewMode === "forecast" ? "selected" : ""}
               onClick={() => {
                 setRainfallGrid(null);
@@ -1357,19 +1542,42 @@ export default function App() {
                 setPredictionGrid(null);
                 setSelectedPredictionCell(null);
                 setPredictionError("");
+                setPredictionRequested(false);
+                setPredictionRunAt(null);
                 setRainfallLoading(false);
                 setTemperatureLoading(false);
-                const dates =
-                  selectedPredictionModel?.available_initialization_dates ?? [];
+                const dates = selectedPredictionModel?.available_initialization_dates ?? [];
                 if (dates.length > 0) {
                   setPredictionInitializationDate(dates[dates.length - 1]);
                 }
+                setSettingsOpen(false);
+                setInfoOpen(true);
                 setViewMode("forecast");
               }}
             >
               Prediction
             </button>
+            <button
+              type="button"
+              aria-pressed={viewMode === "whatif"}
+              className={viewMode === "whatif" ? "selected" : ""}
+              onClick={() => {
+                setRainfallGrid(null);
+                setTemperatureGrid(null);
+                setPredictionGrid(null);
+                setSelectedPredictionCell(null);
+                setPredictionError("");
+                setPredictionRequested(false);
+                setPredictionRunAt(null);
+                setSettingsOpen(false);
+                setInfoOpen(true);
+                setViewMode("whatif");
+              }}
+            >
+              What-If
+            </button>
           </div>
+          <p className="active-mode-description">{modeDescriptions[viewMode].description}</p>
 
           <div className="top-status" title={apiStatusMessage}>
             <div className={`data-status api-status ${apiStatus}`}>
@@ -1378,19 +1586,30 @@ export default function App() {
                 {apiStatus === "checking"
                   ? "Checking API"
                   : apiStatus === "healthy"
-                    ? "API reachable"
-                    : "API unavailable"}
+                    ? "API Reachable"
+                    : "API Offline"}
               </span>
               <small>
-                {imdDates.length > 0
-                  ? `IMD rainfall · ${imdDates[0]}–${imdDates[imdDates.length - 1]}`
-                  : "Checking rainfall sources"}
+                {viewMode === "live"
+                  ? liveWeatherError
+                    ? "Latest weather refresh failed"
+                    : liveWeatherLoading && liveWeatherRecords.length === 0
+                      ? "Loading latest available data"
+                      : liveWeatherRecords.length > 0
+                        ? `Fetched ${new Date(liveWeatherRecords[0].fetched_at_utc).toLocaleTimeString()}`
+                        : "No live weather records available"
+                  : viewMode === "whatif"
+                    ? "Interactive Simulation"
+                    : imdDates.length > 0
+                    ? `IMD 2025 Grids (${imdDates.length} days)`
+                    : "Checking national datasets"}
               </small>
             </div>
           </div>
         </div>
       </header>
 
+      {/* Map toolbar */}
       <div className="map-toolbar" aria-label="Map controls">
         <form className="place-search" role="search" onSubmit={submitPlaceSearch}>
           <Search size={16} aria-hidden="true" />
@@ -1426,19 +1645,39 @@ export default function App() {
             </div>
           )}
         </form>
-        <button
-          type="button"
-          className={`toolbar-button${settingsOpen ? " active" : ""}`}
-          aria-label="Map layers"
-          aria-expanded={settingsOpen}
-          onClick={() => setSettingsOpen((open) => !open)}
-        >
-          <Layers3 size={17} />
-          <span>Layers</span>
-        </button>
+
+        <div className="map-toolbar-actions">
+          <button
+            type="button"
+            className={`toolbar-button${settingsOpen ? " active" : ""}`}
+            aria-label="Map layers"
+            aria-expanded={settingsOpen}
+            onClick={() => {
+              setInfoOpen(false);
+              setSettingsOpen((open) => !open);
+            }}
+          >
+            <Layers3 size={17} />
+            <span>Layers</span>
+          </button>
+          <button
+            type="button"
+            className={`toolbar-button${infoOpen ? " active" : ""}`}
+            aria-label="Location and mode details"
+            aria-expanded={infoOpen}
+            onClick={() => {
+              setSettingsOpen(false);
+              setInfoOpen((open) => !open);
+            }}
+          >
+            <Info size={16} />
+            <span>Details</span>
+          </button>
+        </div>
       </div>
 
-      <nav className="navigation-rail" aria-label="Map navigation">
+      {/* Navigation rail */}
+      <nav className={`navigation-rail navigation-rail-${viewMode}`} aria-label="Map navigation">
         <button type="button" className="nav-action" aria-label="Return to India" title="India" onClick={flyToIndia}>
           <Compass size={17} />
         </button>
@@ -1450,49 +1689,145 @@ export default function App() {
         </button>
       </nav>
 
+      {/* Info panel */}
       {infoOpen && (
         <aside className="weather-panel" aria-label="Selected location information">
           <div className="panel-title-row">
             <div>
-              <p className="eyebrow">Selected location</p>
+                <p className="eyebrow">{modeDescriptions[viewMode].title}</p>
               <h1>{selectedLocation.name}</h1>
             </div>
-            <button type="button" className="icon-button panel-close" aria-label="Close location information" onClick={() => setInfoOpen(false)}>
+            <button
+              type="button"
+              className="icon-button panel-close"
+              aria-label="Close location information"
+              onClick={() => setInfoOpen(false)}
+            >
               <X size={16} />
             </button>
           </div>
           <p className="location-caption">{selectedLocation.region} · {selectedLocation.code}</p>
-          {viewMode === "forecast" ? (
+          <p className="mode-description">{modeDescriptions[viewMode].description}</p>
+
+          {/* Mode specific info contents */}
+          {viewMode === "live" ? (
+            <div className="climate-value-panel" aria-live="polite">
+              {liveWeatherError && (
+                <p className="rainfall-error">
+                  Latest weather data could not be refreshed: {liveWeatherError}
+                </p>
+              )}
+              {selectedLiveStation ? (
+                <>
+                  <strong style={{ fontSize: 20 }}>
+                    {selectedLiveStation.temperature_c !== null
+                      ? `${selectedLiveStation.temperature_c.toFixed(1)} °C`
+                      : "Temperature unavailable"}
+                  </strong>
+                  <span>{selectedLiveStation.weather_condition || "Condition unavailable"}</span>
+                  <span className="data-kind-label">
+                    {selectedLiveStation.is_observation
+                      ? "Station observation"
+                      : "Model-derived analysis · not a station observation"}
+                    {" · "}
+                    {selectedLiveStation.data_status}
+                  </span>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8, fontSize: 11 }}>
+                    <div>Rainfall: <strong>{selectedLiveStation.rainfall_mm !== null ? `${selectedLiveStation.rainfall_mm} mm` : "Unavailable"}</strong></div>
+                    <div>Humidity: <strong>{selectedLiveStation.relative_humidity_percent !== null ? `${selectedLiveStation.relative_humidity_percent}%` : "—"}</strong></div>
+                    <div>Wind: <strong>{selectedLiveStation.wind_speed_kmh !== null ? `${selectedLiveStation.wind_speed_kmh} km/h` : "—"}</strong></div>
+                    <div>Pressure: <strong>{selectedLiveStation.surface_pressure_hpa !== null ? `${selectedLiveStation.surface_pressure_hpa} hPa` : "—"}</strong></div>
+                  </div>
+                  <small style={{ marginTop: 8, display: "block" }}>
+                    Source: {selectedLiveStation.source_product}
+                    <br />
+                    {selectedLiveStation.is_observation ? "Observation time" : "Data time"} (UTC):{" "}
+                    {selectedLiveStation.observation_time_utc}
+                  </small>
+                </>
+              ) : (
+                <span>
+                  {liveWeatherLoading
+                    ? "Loading latest available weather data…"
+                    : liveWeatherRecords.length > 0
+                      ? "Select a station in the live strip to inspect its latest available record."
+                      : "No live weather records are currently available from the configured providers."}
+                </span>
+              )}
+            </div>
+          ) : viewMode === "whatif" ? (
+            <div className="climate-value-panel" aria-live="polite">
+              <span>
+                Choose a geographic scope, baseline, and variables; run the simulation to compare the baseline, scenario, and mapped difference.
+              </span>
+            </div>
+          ) : viewMode === "forecast" ? (
             <div className="climate-value-panel" aria-live="polite">
               {predictionLoading && <span>Generating one-day model prediction…</span>}
-              {predictionError && (
-                <span className="rainfall-error">{predictionError}</span>
+              {predictionError && <span className="rainfall-error">{predictionError}</span>}
+              {!predictionGrid && !predictionLoading && !predictionError && (
+                <span>
+                  Select a model variable and an available initialization date, then run the prediction.
+                </span>
+              )}
+              {!predictionGrid && (
+                <button
+                  type="button"
+                  className="prediction-run-btn"
+                  onClick={() => {
+                    setPredictionError("");
+                    setPredictionRunAt(null);
+                    setSelectedPredictionCell(null);
+                    setPredictionRequested(true);
+                  }}
+                  disabled={
+                    !selectedPredictionModel?.available ||
+                    !predictionInitializationDate ||
+                    predictionLoading
+                  }
+                >
+                  {predictionLoading ? "Running prediction…" : "Run 1-day prediction"}
+                </button>
               )}
               {predictionGrid && (
                 <>
+                  <span className="data-kind-label">AI model estimate · not an observation</span>
                   {selectedPredictionCell ? (
                     <strong>
                       {selectedPredictionCell.value === null
                         ? "No valid forecast"
-                        : `${selectedPredictionCell.value.toFixed(
-                            predictionVariable === "rainfall" ? 1 : 1,
-                          )} ${predictionGrid.units}`}
+                        : `${selectedPredictionCell.value.toFixed(1)} ${predictionGrid.units}`}
                     </strong>
                   ) : (
-                    <strong>{predictionGrid.forecast_date}</strong>
+                    <strong>{predictionGrid.forecast_date} · {predictionGrid.units}</strong>
                   )}
                   <span>
-                    {predictionGrid.model_name} · initialized{" "}
-                    {predictionGrid.initialization_date}
+                    {predictionGrid.variable.toUpperCase()} · {predictionGrid.model_name}
+                    <br />
+                    One-day forecast from {predictionGrid.initialization_date}
                   </span>
-                  {selectedPredictionCell && (
-                    <small>
-                      Forecast cell {selectedPredictionCell.latitude.toFixed(2)}°N,{" "}
-                      {selectedPredictionCell.longitude.toFixed(2)}°E
+                  {predictionGrid.forecast_date < new Date().toISOString().slice(0, 10) && (
+                    <small className="prediction-retrospective-note">
+                      Target date is in the past relative to today; this is a retrospective model estimate, not a future forecast.
                     </small>
                   )}
-                  {!selectedPredictionCell && (
+                  {selectedPredictionCell ? (
+                    <small>
+                      Forecast cell {selectedPredictionCell.latitude.toFixed(2)}°N, {selectedPredictionCell.longitude.toFixed(2)}°E
+                    </small>
+                  ) : (
                     <small>Click the globe to inspect the nearest forecast grid cell.</small>
+                  )}
+                  <small>Source: {predictionGrid.source}</small>
+                  {predictionGrid.evaluation?.test_metrics && (
+                    <small>
+                      Held-out test metrics: MAE {predictionGrid.evaluation.test_metrics.MAE.toFixed(2)} {predictionGrid.units},
+                      {" "}RMSE {predictionGrid.evaluation.test_metrics.RMSE.toFixed(2)} {predictionGrid.units}
+                      {" "}({predictionGrid.evaluation.test_metrics.sample_count} samples)
+                    </small>
+                  )}
+                  {predictionRunAt && (
+                    <small>Prediction generated: {new Date(predictionRunAt).toLocaleString()}</small>
                   )}
                 </>
               )}
@@ -1500,9 +1835,6 @@ export default function App() {
           ) : temperatureSource !== "none" ? (
             <div className="climate-value-panel" aria-live="polite">
               {temperatureLoading && <span>Reading IMD temperature grid cell…</span>}
-              {rainfallCellStatus === "error" && (
-                <span className="rainfall-error">{rainfallCellError}</span>
-              )}
               {selectedTemperatureCell && (
                 <>
                   <strong>
@@ -1510,26 +1842,16 @@ export default function App() {
                       ? "Missing observation"
                       : `${selectedTemperatureCell.temperature.toFixed(1)} °C`}
                   </strong>
-                  <span>
-                    {selectedTemperatureCell.observation_date} · IMD{" "}
-                    {selectedTemperatureCell.variable} · native 1° grid
-                  </span>
-                  <small>
-                    Grid cell {selectedTemperatureCell.latitude.toFixed(1)}°N,{" "}
-                    {selectedTemperatureCell.longitude.toFixed(1)}°E
-                  </small>
+                  <span>{selectedTemperatureCell.observation_date} · IMD {selectedTemperatureCell.variable}</span>
+                  <small>Grid cell {selectedTemperatureCell.latitude.toFixed(1)}°N, {selectedTemperatureCell.longitude.toFixed(1)}°E</small>
                 </>
               )}
-              {!selectedTemperatureCell && !temperatureLoading &&
-                rainfallCellStatus !== "error" &&
-                "Click the globe to inspect the nearest 1-degree temperature cell."}
+              {!selectedTemperatureCell && !temperatureLoading && "Click the globe to inspect the nearest 1° temperature cell."}
             </div>
           ) : rainfallSource === "imd" ? (
             <div className="climate-value-panel" aria-live="polite">
               {rainfallCellStatus === "loading" && <span>Reading IMD grid cell…</span>}
-              {rainfallCellStatus === "error" && (
-                <span className="rainfall-error">{rainfallCellError}</span>
-              )}
+              {rainfallCellStatus === "error" && <span className="rainfall-error">{rainfallCellError}</span>}
               {selectedRainfallCell && (
                 <>
                   <strong>
@@ -1537,48 +1859,50 @@ export default function App() {
                       ? "Missing observation"
                       : `${selectedRainfallCell.rainfall.toFixed(1)} mm/day`}
                   </strong>
-                  <span>
-                    {selectedRainfallCell.observation_date} · IMD 0.25° grid
-                  </span>
-                  <small>
-                    Grid cell {selectedRainfallCell.latitude.toFixed(2)}°N,{" "}
-                    {selectedRainfallCell.longitude.toFixed(2)}°E
-                  </small>
+                  <span>{selectedRainfallCell.observation_date} · IMD 0.25° grid</span>
+                  <small>Grid cell {selectedRainfallCell.latitude.toFixed(2)}°N, {selectedRainfallCell.longitude.toFixed(2)}°E</small>
                 </>
               )}
-              {!selectedRainfallCell &&
-                rainfallCellStatus === "unavailable" &&
-                "Choose the IMD rainfall layer and click a grid location to inspect a value."}
-              {!selectedRainfallCell &&
-                rainfallCellStatus === "idle" &&
-                "Click the globe to inspect the nearest IMD grid cell."}
-            </div>
-          ) : rainfallSource === "nasa" ? (
-            <div className="climate-value-panel">
-              NASA GPM IMERG is shown as a rendered GIBS image only. Numeric rainfall values are
-              not queryable from this layer.
+              {!selectedRainfallCell && rainfallCellStatus === "idle" && "Click the globe to inspect the nearest IMD grid cell."}
             </div>
           ) : (
-            <div className="climate-unavailable">
-              Select a connected rainfall source to inspect this location.
-            </div>
+            <div className="climate-unavailable">Select a climate layer to inspect coordinates.</div>
           )}
-          <p className="source-note">
-            {viewMode === "forecast" && predictionGrid
-              ? `Model prediction—not an observation. ${predictionGrid.run_type === "historical_hindcast" ? "Historical hindcast" : "Out-of-sample projection"} for ${predictionGrid.forecast_date}, initialized ${predictionGrid.initialization_date}. Trained on IMD observations ${predictionGrid.training_period.start}–${predictionGrid.training_period.end}; this is not a current weather forecast.`
-              : viewMode === "forecast"
-                ? "Predictions are unavailable until a trained model and valid observation date are selected."
-                : temperatureSource !== "none"
-              ? `Source: India Meteorological Department. Historical daily ${temperatureSource === "tmax" ? "maximum" : "minimum"} temperature; native 1° grid; degrees Celsius. Missing cells are shown transparently.`
-              : rainfallSource === "imd"
-              ? "Source: India Meteorological Department. Historical daily observation; native 0.25° grid. Missing cells are shown transparently."
-              : rainfallSource === "nasa"
-                ? `Source: NASA GPM IMERG via GIBS · ${rainfallDate || "no date selected"} · visualization only; GES DISC grid access requires server-side Earthdata authentication.`
-                : "No rainfall source is selected. Temperature and cyclone data are not connected."}
-          </p>
+          {viewMode === "whatif" && scenarioScopesError && (
+            <p className="scenario-scope-error">{scenarioScopesError}</p>
+          )}
+          {viewMode === "whatif" && (
+            <WhatIfScenarioDock
+              scopes={scenarioScopesList}
+              selectedScope={scenarioScope}
+              onSelectScope={setScenarioScope}
+              baselineSource={scenarioBaselineSource}
+              onSelectBaselineSource={setScenarioBaselineSource}
+              baselineDate={scenarioBaselineDate}
+              onSelectBaselineDate={setScenarioBaselineDate}
+              variableSelection={scenarioVarSelection}
+              onSelectVariableSelection={setScenarioVarSelection}
+              rainfallChangePct={rainfallChangePct}
+              onChangeRainfallChangePct={setRainfallChangePct}
+              tmaxDelta={tmaxDelta}
+              onChangeTmaxDelta={setTmaxDelta}
+              tminDelta={tminDelta}
+              onChangeTminDelta={setTminDelta}
+              running={scenarioRunning}
+              error={scenarioError}
+              onRunScenario={handleRunScenario}
+              onReset={handleResetScenario}
+              result={scenarioResult}
+              viewLayer={scenarioViewLayer}
+              onSelectViewLayer={setScenarioViewLayer}
+              activeVariable={scenarioActiveVar}
+              onSelectActiveVariable={setScenarioActiveVar}
+            />
+          )}
         </aside>
       )}
 
+      {/* Settings popover */}
       {settingsOpen && (
         <section className="settings-popover" aria-label="Map layers">
           <div className="popover-heading">
@@ -1621,7 +1945,69 @@ export default function App() {
             <span className="layer-swatch city-label-swatch" />
             <span>Cities & towns (zoom-adaptive)</span>
           </label>
-          {viewMode === "forecast" ? (
+
+          {/* Mode specific layers */}
+          {viewMode === "live" ? (
+            <>
+              <p className="layer-group-label">NASA Satellite Imagery Overlay</p>
+              <p className="source-note">
+                Satellite imagery is a visual layer; it is not a numerical rainfall observation.
+              </p>
+              <label className="layer-item">
+                <input
+                  type="checkbox"
+                  checked={satelliteOverlayActive}
+                  onChange={(e) => setSatelliteOverlayActive(e.target.checked)}
+                />
+                <span className="layer-swatch" style={{ background: "#38bdf8" }} />
+                <span>Show NASA satellite layer overlay</span>
+              </label>
+
+              {satelliteOverlayActive && (
+                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <select
+                    className="whatif-select"
+                    value={selectedSatelliteLayerId}
+                    onChange={(e) => {
+                      setSelectedSatelliteLayerId(e.target.value);
+                      const layer = satelliteLayersList.find((item) => item.layer_id === e.target.value);
+                      if (layer) setSatelliteDate(layer.default_date);
+                    }}
+                  >
+                    {satelliteLayersList.map((l) => (
+                      <option key={l.layer_id} value={l.layer_id}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="date"
+                    className="whatif-input"
+                    value={satelliteDate}
+                    onChange={(e) => setSatelliteDate(e.target.value)}
+                  />
+                </div>
+              )}
+              {satelliteLayersList.length === 0 && (
+                <p className="source-note">
+                  Satellite layer metadata is unavailable; no imagery overlay can be selected.
+                </p>
+              )}
+
+              <p className="layer-group-label" style={{ marginTop: 12 }}>Provider Ingestion Status</p>
+              {liveMetadataError && <p className="rainfall-error">{liveMetadataError}</p>}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 10 }}>
+                {liveProviders.map((p) => (
+                  <div key={p.provider_id} style={{ display: "flex", justifyContent: "space-between", color: "rgba(255,255,255,0.7)" }}>
+                    <span>{p.name.split("(")[0]}</span>
+                    <span style={{ color: p.available ? "#4ade80" : "#fbbf24" }}>
+                      {p.data_status === "credentials_required" ? "Gated (Registration req.)" : p.data_status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : viewMode === "forecast" ? (
             <>
               <p className="layer-group-label">One-day prediction</p>
               <div className="rainfall-layer-options">
@@ -1640,7 +2026,7 @@ export default function App() {
                       <span>{model.label}</span>
                       <small>
                         {model.available && model.test_metrics
-                          ? `${model.model_name} · native ${model.spatial_resolution_degrees}° · ${model.units} · test RMSE ${model.test_metrics.RMSE.toFixed(2)} vs persistence ${model.persistence_test_metrics?.RMSE.toFixed(2) ?? "unavailable"}`
+                          ? `${model.model_name} · native ${model.spatial_resolution_degrees}° · ${model.units} · test RMSE ${model.test_metrics.RMSE.toFixed(2)}`
                           : model.error ?? "No trained model installed"}
                       </small>
                     </button>
@@ -1650,369 +2036,301 @@ export default function App() {
               {predictionCatalogError && (
                 <p className="rainfall-error">{predictionCatalogError}</p>
               )}
-              {predictionLoading && (
-                <p className="source-note">Generating the selected one-day prediction…</p>
-              )}
-              {predictionError && <p className="rainfall-error">{predictionError}</p>}
-              {predictionGrid && (
+            </>
+          ) : viewMode === "historical" ? (
+            <>
+              <p className="layer-group-label">Climate fields</p>
+              <div className="rainfall-layer-options">
+                <button
+                  type="button"
+                  className={`rainfall-layer-option${temperatureSource === "tmax" ? " selected" : ""}`}
+                  aria-pressed={temperatureSource === "tmax"}
+                  disabled={temperatureDates.tmax.length === 0}
+                  onClick={() => selectTemperatureSource(temperatureSource === "tmax" ? "none" : "tmax")}
+                >
+                  <Thermometer size={15} aria-hidden="true" />
+                  <span>Maximum temperature</span>
+                  <small>
+                    {temperatureDates.tmax.length > 0
+                      ? `IMD · 1° · °C · ${temperatureDates.tmax.length} dates`
+                      : "No local IMD Tmax file"}
+                  </small>
+                </button>
+                <button
+                  type="button"
+                  className={`rainfall-layer-option${temperatureSource === "tmin" ? " selected" : ""}`}
+                  aria-pressed={temperatureSource === "tmin"}
+                  disabled={temperatureDates.tmin.length === 0}
+                  onClick={() => selectTemperatureSource(temperatureSource === "tmin" ? "none" : "tmin")}
+                >
+                  <Thermometer size={15} aria-hidden="true" />
+                  <span>Minimum temperature</span>
+                  <small>
+                    {temperatureDates.tmin.length > 0
+                      ? `IMD · 1° · °C · ${temperatureDates.tmin.length} dates`
+                      : "No local IMD Tmin file"}
+                  </small>
+                </button>
+                <button
+                  type="button"
+                  className={`rainfall-layer-option${rainfallSource === "imd" ? " selected" : ""}`}
+                  aria-pressed={rainfallSource === "imd"}
+                  disabled={imdDates.length === 0}
+                  onClick={() => selectRainfallSource(rainfallSource === "imd" ? "none" : "imd")}
+                >
+                  <Droplets size={15} aria-hidden="true" />
+                  <span>IMD rainfall</span>
+                  <small>
+                    {imdDates.length > 0
+                      ? `0.25° · mm/day · ${imdDates.length} dates`
+                      : rainfallError || "No local IMD file"}
+                  </small>
+                </button>
+                <button
+                  type="button"
+                  className={`rainfall-layer-option${rainfallSource === "nasa" ? " selected" : ""}`}
+                  aria-pressed={rainfallSource === "nasa"}
+                  disabled={nasaAvailabilityStatus !== "available"}
+                  onClick={() => selectRainfallSource(rainfallSource === "nasa" ? "none" : "nasa")}
+                >
+                  <Cloud size={15} aria-hidden="true" />
+                  <span>NASA IMERG imagery</span>
+                  <small>
+                    {nasaAvailabilityStatus === "available" && nasaAvailability
+                      ? `GIBS image · ${nasaAvailability.observation_date_end}`
+                      : "NASA GIBS unavailable"}
+                  </small>
+                </button>
+              </div>
+
+              {rainfallLoading && <p className="source-note">Loading IMD rainfall observation…</p>}
+              {rainfallError && <p className="rainfall-error">{rainfallError}</p>}
+              {temperatureError && <p className="rainfall-error">{temperatureError}</p>}
+              {rainfallSource === "nasa" && (
                 <p className="source-note">
-                  Initialization {predictionGrid.initialization_date} → forecast{" "}
-                  {predictionGrid.forecast_date} · {predictionGrid.run_type} ·{" "}
-                  {predictionGrid.valid_cell_count} valid native grid cells. Not a current
-                  weather forecast.
+                  NASA GIBS satellite imagery is visual-only and does not provide queryable rainfall grid values.
                 </p>
               )}
+
+              <div className="unavailable-climate-layers">
+                {unavailableClimateLayers.map(({ label, source, sourceUrl, sourceLabel, icon: Icon }) => (
+                  <div className="unavailable-climate-item" key={label}>
+                    <button type="button" className="unavailable-climate-layer" disabled title={`${label} unavailable: ${source}`}>
+                      <Icon size={15} aria-hidden="true" />
+                      <span>{label}</span>
+                      <small>{source}</small>
+                    </button>
+                    <a className="unavailable-climate-reference" href={sourceUrl} target="_blank" rel="noreferrer">
+                      {sourceLabel}
+                    </a>
+                  </div>
+                ))}
+              </div>
             </>
-          ) : (
-            <>
-          <p className="layer-group-label">Climate fields</p>
-          <div className="rainfall-layer-options">
-            <button
-              type="button"
-              className={`rainfall-layer-option${temperatureSource === "tmax" ? " selected" : ""}`}
-              aria-pressed={temperatureSource === "tmax"}
-              disabled={temperatureDates.tmax.length === 0}
-              onClick={() =>
-                selectTemperatureSource(temperatureSource === "tmax" ? "none" : "tmax")
-              }
-            >
-              <Thermometer size={15} aria-hidden="true" />
-              <span>Maximum temperature</span>
-              <small>
-                {temperatureDates.tmax.length > 0
-                  ? `IMD · 1° · °C · ${temperatureDates.tmax.length} dates`
-                  : "No local IMD Tmax file"}
-              </small>
-            </button>
-            <button
-              type="button"
-              className={`rainfall-layer-option${temperatureSource === "tmin" ? " selected" : ""}`}
-              aria-pressed={temperatureSource === "tmin"}
-              disabled={temperatureDates.tmin.length === 0}
-              onClick={() =>
-                selectTemperatureSource(temperatureSource === "tmin" ? "none" : "tmin")
-              }
-            >
-              <Thermometer size={15} aria-hidden="true" />
-              <span>Minimum temperature</span>
-              <small>
-                {temperatureDates.tmin.length > 0
-                  ? `IMD · 1° · °C · ${temperatureDates.tmin.length} dates`
-                  : "No local IMD Tmin file"}
-              </small>
-            </button>
-            <button
-              type="button"
-              className={`rainfall-layer-option${rainfallSource === "imd" ? " selected" : ""}`}
-              aria-pressed={rainfallSource === "imd"}
-              disabled={imdDates.length === 0}
-              onClick={() => selectRainfallSource(rainfallSource === "imd" ? "none" : "imd")}
-            >
-              <Droplets size={15} aria-hidden="true" />
-              <span>IMD rainfall</span>
-              <small>
-                {imdDates.length > 0
-                  ? `0.25° · mm/day · ${imdDates.length} dates`
-                  : rainfallError || "No local IMD file"}
-              </small>
-            </button>
-            <button
-              type="button"
-              className={`rainfall-layer-option${rainfallSource === "nasa" ? " selected" : ""}`}
-              aria-pressed={rainfallSource === "nasa"}
-              disabled={nasaAvailabilityStatus !== "available"}
-              title={
-                nasaAvailabilityStatus === "unavailable"
-                  ? "NASA GIBS availability could not be retrieved."
-                  : "NASA GPM IMERG rendered imagery; grid values are not queryable."
-              }
-              onClick={() => selectRainfallSource(rainfallSource === "nasa" ? "none" : "nasa")}
-            >
-              <Cloud size={15} aria-hidden="true" />
-              <span>NASA GPM IMERG</span>
-              <small>
-                {nasaAvailabilityStatus === "checking"
-                  ? "Checking NASA GIBS"
-                  : nasaAvailabilityStatus === "available" && nasaAvailability
-                    ? `GIBS image · ${nasaAvailability.observation_date_end} · not queryable`
-                    : "NASA GIBS unavailable"}
-              </small>
-            </button>
-          </div>
-          <div className="unavailable-climate-layers">
-            {unavailableClimateLayers.map(
-              ({ label, source, sourceUrl, sourceLabel, icon: Icon }) => (
-                <div className="unavailable-climate-item" key={label}>
-                  <button
-                    type="button"
-                    className="unavailable-climate-layer"
-                    disabled
-                    title={`${label} unavailable: ${source}`}
-                  >
-                    <Icon size={15} aria-hidden="true" />
-                    <span>{label}</span>
-                    <small>{source}</small>
-                  </button>
-                  <a
-                    className="unavailable-climate-reference"
-                    href={sourceUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {sourceLabel}
-                  </a>
-                </div>
-              ),
-            )}
-          </div>
-          {rainfallLoading && <p className="source-note">Loading the selected IMD observation…</p>}
-          {temperatureLoading && (
-            <p className="source-note">Loading the selected IMD temperature observation…</p>
-          )}
-          {rainfallError && <p className="rainfall-error">{rainfallError}</p>}
-          {temperatureError && <p className="rainfall-error">{temperatureError}</p>}
-          {rainfallSource === "imd" && rainfallGrid && (
-            <p className="source-note">
-              {rainfallGrid.observation_date} · IMD · {rainfallGrid.units} · native{" "}
-              {rainfallGrid.spatial_resolution_degrees}° · {rainfallGrid.valid_cell_count} valid
-              grid cells
-            </p>
-          )}
-          {rainfallSource === "nasa" && nasaAvailability && (
-            <p className="source-note">
-              {nasaAvailability.product} · {nasaAvailability.units} · {nasaAvailability.attribution}
-            </p>
-          )}
-          {temperatureSource !== "none" && temperatureGrid && (
-            <p className="source-note">
-              {temperatureGrid.observation_date} · IMD {temperatureGrid.variable} · °C · native
-              1° · {temperatureGrid.valid_cell_count} valid cells
-            </p>
-          )}
-            </>
-          )}
+          ) : null}
+
           <div className="geo-attribution">
-            Globe: Esri World Imagery (realistic 3D Earth) · Boundaries: geoBoundaries IND-ADM1 (CC BY 4.0) · Climate: IMD & NASA GIBS.
+            Globe: Esri World Imagery (realistic 3D Earth) · Boundaries: geoBoundaries IND-ADM1 (CC BY 4.0) · Telemetry: IMD & Open-Meteo · Satellite: NASA GIBS.
           </div>
         </section>
       )}
 
-      <footer className="timeline-control" aria-label="Climate observation timeline">
-        <div className="timeline-status">
-          <CalendarDays size={15} aria-hidden="true" />
-          <span>{viewMode === "forecast" ? "Model prediction" : "Historical observations"}</span>
-          <small>
-            {viewMode === "forecast"
-              ? predictionInitializationDates.length > 0
-                ? `${predictionInitializationDates.length} initialization dates`
-                : "No model dates available"
-              : rainfallSource === "imd"
-              ? `${imdDates.length} IMD dates`
-              : temperatureSource !== "none"
-                ? `${temperatureDates[temperatureSource].length} IMD dates`
-              : rainfallSource === "nasa" && nasaAvailability
-                ? "NASA GIBS imagery"
-                : "Select a rainfall source"}
-          </small>
-        </div>
-        <input
-          aria-label={
-            viewMode === "forecast"
-              ? "Select model initialization date"
-              : temperatureSource !== "none"
-              ? "Select temperature observation date"
-              : "Select rainfall observation date"
-          }
-          type="date"
-          min={
-            viewMode === "forecast"
-              ? predictionInitializationDates[0]
-              : rainfallSource === "imd"
-              ? imdDates[0]
-              : temperatureSource !== "none"
-                ? temperatureDates[temperatureSource][0]
-              : rainfallSource === "nasa"
-                ? nasaAvailability?.observation_date_start
-                : undefined
-          }
-          max={
-            viewMode === "forecast"
-              ? predictionInitializationDates[predictionInitializationDates.length - 1]
-              : rainfallSource === "imd"
-              ? imdDates[imdDates.length - 1]
-              : temperatureSource !== "none"
-                ? temperatureDates[temperatureSource][
-                    temperatureDates[temperatureSource].length - 1
-                  ]
-              : rainfallSource === "nasa"
-                ? nasaAvailability?.observation_date_end
-                : undefined
-          }
-          value={viewMode === "forecast" ? predictionInitializationDate : rainfallDate}
-          disabled={
-            viewMode === "forecast"
-              ? predictionInitializationDates.length === 0
-              : (temperatureSource !== "none" &&
-              temperatureDates[temperatureSource].length === 0) ||
-            (rainfallSource === "none" && temperatureSource === "none") ||
-            (rainfallSource === "imd" && imdDates.length === 0) ||
-            (rainfallSource === "nasa" && !nasaAvailability)
-          }
-          onChange={(event) => {
-            const nextDate = event.target.value;
-            if (viewMode === "forecast") {
-              if (!predictionInitializationDates.includes(nextDate)) {
-                setPredictionError(
-                  "No trained model initialization is available for that date.",
-                );
+      {/* Mode Bottom Dock / Controls */}
+      {viewMode === "live" && (
+        <LiveTelemetryBar
+          records={liveWeatherRecords}
+          loading={liveWeatherLoading}
+          error={liveWeatherError}
+          providers={liveProviders}
+          selectedStationId={selectedLiveStation?.location_id ?? null}
+          onSelectStation={handleSelectLiveStation}
+        />
+      )}
+
+      {(viewMode === "historical" || viewMode === "forecast") && (
+        <footer className="timeline-control" aria-label="Climate observation timeline">
+          <div className="timeline-status">
+            <CalendarDays size={15} aria-hidden="true" />
+            <span>{viewMode === "forecast" ? "Model prediction" : "Historical observations"}</span>
+            <small>
+              {viewMode === "forecast"
+                ? predictionInitializationDates.length > 0
+                  ? `${predictionInitializationDates.length} initialization dates`
+                  : "No model dates available"
+                : rainfallSource === "imd"
+                ? `${imdDates.length} IMD dates`
+                : temperatureSource !== "none"
+                  ? `${temperatureDates[temperatureSource].length} IMD dates`
+                : rainfallSource === "nasa" && nasaAvailability
+                  ? "NASA GIBS imagery"
+                  : "Select a rainfall source"}
+            </small>
+          </div>
+          <input
+            aria-label={viewMode === "forecast" ? "Select model date" : "Select observation date"}
+            type="date"
+            min={
+              viewMode === "forecast"
+                ? predictionInitializationDates[0]
+                : rainfallSource === "imd"
+                ? imdDates[0]
+                : temperatureSource !== "none"
+                  ? temperatureDates[temperatureSource][0]
+                : rainfallSource === "nasa"
+                  ? nasaAvailability?.observation_date_start
+                  : undefined
+            }
+            max={
+              viewMode === "forecast"
+                ? predictionInitializationDates[predictionInitializationDates.length - 1]
+                : rainfallSource === "imd"
+                ? imdDates[imdDates.length - 1]
+                : temperatureSource !== "none"
+                  ? temperatureDates[temperatureSource][temperatureDates[temperatureSource].length - 1]
+                : rainfallSource === "nasa"
+                  ? nasaAvailability?.observation_date_end
+                  : undefined
+            }
+            value={viewMode === "forecast" ? predictionInitializationDate : rainfallDate}
+            disabled={
+              viewMode === "forecast"
+                ? predictionInitializationDates.length === 0
+                : (temperatureSource !== "none" && temperatureDates[temperatureSource].length === 0) ||
+                  (rainfallSource === "none" && temperatureSource === "none") ||
+                  (rainfallSource === "imd" && imdDates.length === 0)
+            }
+            onChange={(event) => {
+              const nextDate = event.target.value;
+              if (viewMode === "forecast") {
+                if (!predictionInitializationDates.includes(nextDate)) {
+                  setPredictionError("Choose an initialization date available for this model.");
+                  return;
+                }
+                setPredictionGrid(null);
+                setSelectedPredictionCell(null);
+                setPredictionRequested(false);
+                setPredictionRunAt(null);
+                setPredictionError("");
+                setPredictionInitializationDate(nextDate);
                 return;
               }
-              setPredictionError("");
-              setPredictionGrid(null);
-              setSelectedPredictionCell(null);
-              setPredictionInitializationDate(nextDate);
-              return;
-            }
-            if (
-              rainfallSource === "nasa" &&
-              nasaAvailability &&
-              !isNasaDateAvailable(nextDate, nasaAvailability.available_time_intervals)
-            ) {
-              setRainfallError(
-                "NASA GIBS does not advertise an image for that date. Choose a date within an available interval.",
-              );
-              return;
-            }
-            setRainfallError("");
-            rainfallCellControllerRef.current?.abort();
-            setRainfallDate(nextDate);
-            setRainfallGrid(null);
-            setTemperatureGrid(null);
-            setRainfallLoading(rainfallSource === "imd" && viewMode === "historical");
-            setTemperatureLoading(
-              temperatureSource !== "none" && viewMode === "historical",
-            );
-            setSelectedRainfallCell(null);
-            setSelectedTemperatureCell(null);
-            setRainfallCellError("");
-            setRainfallCellStatus("idle");
-          }}
-        />
-        <span className="timeline-source">
-          {viewMode === "forecast"
-            ? `${selectedPredictionModel?.model_name ?? "No model"} · ${
-                predictionGrid
-                  ? `one-day output for ${predictionGrid.forecast_date}`
-                  : `initialized ${predictionInitializationDate || "date unavailable"}`
-              }`
-            : rainfallSource === "imd"
-            ? "IMD daily observations"
-            : temperatureSource !== "none"
-              ? `IMD ${temperatureSource === "tmax" ? "Tmax" : "Tmin"} daily observations`
-            : rainfallSource === "nasa"
-              ? "NASA GIBS daily imagery"
-              : "No source selected"}
-        </span>
-      </footer>
-
-      {((viewMode === "historical" &&
-        (rainfallSource !== "none" || temperatureSource !== "none")) ||
-        (viewMode === "forecast" && predictionGrid !== null)) && (
-        <aside
-          className="rainfall-legend"
-          aria-label={
-            viewMode === "forecast"
-              ? "Prediction layer legend"
-              : temperatureSource !== "none"
-              ? "Temperature layer legend"
-              : "Rainfall layer details"
-          }
-        >
-          <strong>
-            {viewMode === "forecast" && predictionGrid
-              ? `${predictionGrid.variable === "rainfall" ? "Rainfall" : predictionGrid.variable === "tmax" ? "Maximum temperature" : "Minimum temperature"} prediction · ${predictionGrid.units}`
-              : temperatureSource !== "none"
-              ? `IMD ${temperatureSource === "tmax" ? "Tmax" : "Tmin"} · °C`
+              if (
+                rainfallSource === "nasa" &&
+                nasaAvailability &&
+                !isNasaDateAvailable(nextDate, nasaAvailability.available_time_intervals)
+              ) {
+                setRainfallError("NASA GIBS does not advertise an image for that date.");
+                return;
+              }
+              setRainfallDate(nextDate);
+              setRainfallGrid(null);
+              setTemperatureGrid(null);
+              setRainfallError("");
+              setTemperatureError("");
+              setRainfallLoading(rainfallSource === "imd");
+              setTemperatureLoading(temperatureSource !== "none");
+              setSelectedRainfallCell(null);
+              setSelectedTemperatureCell(null);
+            }}
+          />
+          <span className="timeline-source">
+            {viewMode === "forecast"
+              ? `${selectedPredictionModel?.model_name ?? "No model"} · 1-day prediction`
               : rainfallSource === "imd"
-                ? "IMD rainfall · mm/day"
-                : "NASA IMERG · rendered image"}
+              ? "IMD daily observations"
+              : temperatureSource !== "none"
+                ? `IMD ${temperatureSource === "tmax" ? "Tmax" : "Tmin"} daily observations`
+              : rainfallSource === "nasa"
+                ? "NASA GIBS daily imagery"
+                : "No source selected"}
+          </span>
+        </footer>
+      )}
+
+      {/* Legends */}
+      {viewMode === "whatif" && scenarioResult && (
+        <aside className="rainfall-legend" aria-label="What-If layer legend">
+          <strong>
+            {scenarioViewLayer === "difference"
+              ? `${scenarioActiveVar === "rainfall" ? "Rainfall" : "Temperature"} Difference (Scenario - Baseline)`
+              : `${scenarioActiveVar === "rainfall" ? "Rainfall" : "Temperature"} (${scenarioViewLayer})`}
           </strong>
-          {viewMode === "forecast" && predictionGrid ? (
+          {scenarioViewLayer === "difference" ? (
             <>
-              <div
-                className={
-                  predictionVariable === "rainfall"
-                    ? "rainfall-gradient"
-                    : "temperature-gradient"
-                }
-              />
-              <div className="rainfall-ticks">
-                {predictionVariable === "rainfall" ? (
-                  <>
-                    <span>0</span><span>1</span><span>5</span><span>15</span>
-                    <span>30</span><span>60</span><span>120</span><span>250+ mm/day</span>
-                  </>
-                ) : (
-                  <>
-                    <span>-10</span><span>0</span><span>15</span><span>25</span>
-                    <span>35</span><span>45+ °C</span>
-                  </>
-                )}
+              <div className="diff-legend-gradient" />
+              <div className="diff-legend-labels">
+                <span>{scenarioActiveVar === "rainfall" ? "-25 mm (Deficit)" : "-4 °C (Cooling)"}</span>
+                <span>0</span>
+                <span>{scenarioActiveVar === "rainfall" ? "+25 mm (Surplus)" : "+4 °C (Warming)"}</span>
               </div>
-              <small>
-                {predictionGrid.forecast_date} · initialized {predictionGrid.initialization_date} ·
-                native {predictionGrid.spatial_resolution_degrees}° ·{" "}
-                {predictionGrid.valid_cell_count} valid cells
-              </small>
-              <small>
-                Held-out test (n={predictionGrid.evaluation.test_metrics.sample_count}):{" "}
-                MAE {predictionGrid.evaluation.test_metrics.MAE.toFixed(2)} vs persistence{" "}
-                {predictionGrid.evaluation.persistence_test_metrics.MAE.toFixed(2)}; RMSE{" "}
-                {predictionGrid.evaluation.test_metrics.RMSE.toFixed(2)} vs persistence{" "}
-                {predictionGrid.evaluation.persistence_test_metrics.RMSE.toFixed(2)}.
-              </small>
-              <small>Model output; not an observation or current forecast.</small>
             </>
-          ) : temperatureSource !== "none" ? (
-            <>
-              <div className="temperature-gradient" />
-              <div className="rainfall-ticks">
-                <span>-10</span><span>0</span><span>15</span><span>25</span><span>35</span><span>45+ °C</span>
-              </div>
-              <small>
-                {rainfallDate} · native 1° · IMD {temperatureSource === "tmax" ? "Tmax" : "Tmin"}
-              </small>
-            </>
-          ) : rainfallSource === "imd" ? (
-            <>
-              <div className="rainfall-gradient" />
-              <div className="rainfall-ticks">
-                <span>0</span><span>1</span><span>5</span><span>15</span><span>30</span>
-                <span>60</span><span>120</span><span>250+</span>
-              </div>
-              <small>{rainfallDate} · native 0.25° · IMD</small>
-            </>
+          ) : scenarioActiveVar === "rainfall" ? (
+            <div className="rainfall-legend-scale" aria-hidden="true">
+              {rainfallColorStops.slice(1).map((stop) => (
+                <div key={stop.value} className="legend-step">
+                  <span
+                    className="legend-color"
+                    style={{ background: `rgb(${stop.color[0]}, ${stop.color[1]}, ${stop.color[2]})` }}
+                  />
+                  <span>{stop.value} mm</span>
+                </div>
+              ))}
+            </div>
           ) : (
-            <>
-              {nasaAvailability?.legend_url && (
-                <img
-                  className="nasa-rainfall-legend"
-                  src={nasaAvailability.legend_url}
-                  alt="NASA GPM IMERG precipitation rate legend in millimeters per hour"
-                />
-              )}
-              <small>
-                {rainfallDate} · mm/hr · NASA GIBS visualization only; no numeric cell values
-              </small>
-            </>
+            <div className="rainfall-legend-scale" aria-hidden="true">
+              {temperatureColorStops.map((stop) => (
+                <div key={stop.value} className="legend-step">
+                  <span
+                    className="legend-color"
+                    style={{ background: `rgb(${stop.color[0]}, ${stop.color[1]}, ${stop.color[2]})` }}
+                  />
+                  <span>{stop.value} °C</span>
+                </div>
+              ))}
+            </div>
           )}
+          <small>
+            Scope: {scenarioResult.geographic_scope_name} · Baseline: {scenarioResult.parameters.baseline_date}
+          </small>
         </aside>
       )}
 
-      <div className="map-hint">
-        Scroll to zoom <span>·</span> Drag to rotate <span>·</span> Right-drag to tilt{" "}
-        <span>·</span> Middle/Shift-drag to pan <span>·</span> Double-click to fly
-      </div>
+      {(viewMode === "historical" || viewMode === "forecast") &&
+        ((viewMode === "historical" && (rainfallSource !== "none" || temperatureSource !== "none")) ||
+          (viewMode === "forecast" && predictionGrid !== null)) && (
+          <aside className="rainfall-legend" aria-label="Climate layer legend">
+            <strong>
+              {viewMode === "forecast" && predictionGrid
+                ? `${predictionGrid.variable === "rainfall" ? "Rainfall" : "Temperature"} prediction · ${predictionGrid.units}`
+                : temperatureSource !== "none"
+                ? `IMD ${temperatureSource === "tmax" ? "Tmax" : "Tmin"} · °C`
+                : "IMD daily rainfall · mm/day"}
+            </strong>
+
+            <div className="rainfall-legend-scale" aria-hidden="true">
+              {(viewMode === "forecast" && predictionGrid?.variable !== "rainfall") ||
+              (viewMode === "historical" && temperatureSource !== "none")
+                ? temperatureColorStops.map((stop) => (
+                    <div key={stop.value} className="legend-step">
+                      <span
+                        className="legend-color"
+                        style={{ background: `rgb(${stop.color[0]}, ${stop.color[1]}, ${stop.color[2]})` }}
+                      />
+                      <span>{stop.value} °C</span>
+                    </div>
+                  ))
+                : rainfallColorStops.slice(1).map((stop) => (
+                    <div key={stop.value} className="legend-step">
+                      <span
+                        className="legend-color"
+                        style={{ background: `rgb(${stop.color[0]}, ${stop.color[1]}, ${stop.color[2]})` }}
+                      />
+                      <span>{stop.value} mm</span>
+                    </div>
+                  ))}
+            </div>
+          </aside>
+        )}
     </main>
   );
 }

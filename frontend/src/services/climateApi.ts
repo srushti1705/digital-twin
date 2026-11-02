@@ -3,6 +3,34 @@ const API_BASE_URL = configuredApiUrl
   ? configuredApiUrl.replace(/\/+$/, "")
   : "http://localhost:8000";
 
+const GRID_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_CACHED_GRIDS = 6;
+const gridResponseCache = new Map<string, { value: unknown; expiresAt: number }>();
+
+function getCachedGrid<T>(key: string): T | undefined {
+  const cached = gridResponseCache.get(key);
+  if (!cached) return undefined;
+  if (cached.expiresAt <= Date.now()) {
+    gridResponseCache.delete(key);
+    return undefined;
+  }
+  gridResponseCache.delete(key);
+  gridResponseCache.set(key, cached);
+  return cached.value as T;
+}
+
+function cacheGrid(key: string, value: unknown) {
+  gridResponseCache.delete(key);
+  gridResponseCache.set(key, {
+    value,
+    expiresAt: Date.now() + GRID_CACHE_TTL_MS,
+  });
+  if (gridResponseCache.size > MAX_CACHED_GRIDS) {
+    const oldestKey = gridResponseCache.keys().next().value;
+    if (oldestKey !== undefined) gridResponseCache.delete(oldestKey);
+  }
+}
+
 export type ApiHealth = {
   status: string;
 };
@@ -227,6 +255,9 @@ export async function fetchImdRainfallGrid(
   observationDate: string,
   signal?: AbortSignal,
 ): Promise<ImdRainfallGrid> {
+  const cacheKey = `imd-rainfall:${observationDate}`;
+  const cached = getCachedGrid<ImdRainfallGrid>(cacheKey);
+  if (cached) return cached;
   const query = new URLSearchParams({ date: observationDate });
   const payload = await fetchPayload<ImdRainfallGrid>(
     `/api/climate/rainfall/imd?${query}`,
@@ -248,6 +279,7 @@ export async function fetchImdRainfallGrid(
   ) {
     throw new Error("IMD rainfall grid response has an unexpected format.");
   }
+  cacheGrid(cacheKey, payload);
   return payload;
 }
 
@@ -300,6 +332,9 @@ export async function fetchImdTemperatureGrid(
   observationDate: string,
   signal?: AbortSignal,
 ): Promise<ImdTemperatureGrid> {
+  const cacheKey = `imd-temperature:${variable}:${observationDate}`;
+  const cached = getCachedGrid<ImdTemperatureGrid>(cacheKey);
+  if (cached) return cached;
   const query = new URLSearchParams({ date: observationDate });
   const payload = await fetchPayload<ImdTemperatureGrid>(
     `/api/climate/temperature/${variable}?${query}`,
@@ -320,6 +355,7 @@ export async function fetchImdTemperatureGrid(
   ) {
     throw new Error(`IMD ${variable} grid response has an unexpected format.`);
   }
+  cacheGrid(cacheKey, payload);
   return payload;
 }
 
@@ -393,6 +429,9 @@ export async function fetchPredictionGrid(
   initializationDate: string,
   signal?: AbortSignal,
 ): Promise<PredictionGrid> {
+  const cacheKey = `prediction:${variable}:${initializationDate}`;
+  const cached = getCachedGrid<PredictionGrid>(cacheKey);
+  if (cached) return cached;
   const query = new URLSearchParams({ initialization_date: initializationDate });
   const payload = await fetchPayload<PredictionGrid>(
     `/api/predictions/${variable}?${query}`,
@@ -414,5 +453,35 @@ export async function fetchPredictionGrid(
   ) {
     throw new Error(`The ${variable} prediction grid has an unexpected format.`);
   }
+  cacheGrid(cacheKey, payload);
   return payload;
+}
+
+
+export type PredictionCell = {
+  variable: PredictionVariable;
+  latitude: number;
+  longitude: number;
+  value: number | null;
+  units: string;
+  spatial_resolution_degrees: number;
+  missing: boolean;
+};
+
+export async function fetchPredictionCell(
+  variable: PredictionVariable,
+  initializationDate: string,
+  latitude: number,
+  longitude: number,
+  signal?: AbortSignal,
+): Promise<PredictionCell> {
+  const query = new URLSearchParams({
+    initialization_date: initializationDate,
+    latitude: String(latitude),
+    longitude: String(longitude),
+  });
+  return fetchPayload<PredictionCell>(
+    `/api/predictions/${variable}/cell?${query}`,
+    signal,
+  );
 }
