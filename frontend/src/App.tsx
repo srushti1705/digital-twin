@@ -16,6 +16,11 @@ import { CameraFlyTo, ImageryLayer, Viewer } from "resium";
 import * as Cesium from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
 import "./App.css";
+import {
+  ORIGINAL_EARTH_IMAGERY_PROVIDER,
+  buildGeographicLabelsDataSources,
+  styleBoundaryEntities,
+} from "./services/mapLayers";
 import { fetchApiHealth } from "./services/climateApi";
 import { searchPlaces } from "./services/geocoding";
 import type { GeocodedPlace } from "./services/geocoding";
@@ -41,9 +46,9 @@ import type {
   PredictionVariable,
 } from "./services/climateApi";
 
-const INDIA_VIEW = { longitude: 78.9, latitude: 20.5, height: 3_600_000 };
-const MAHARASHTRA_VIEW = { longitude: 75.7, latitude: 19.2, height: 850_000 };
-const GLOBAL_VIEW = { longitude: 15, latitude: 15, height: 12_500_000 };
+const INDIA_VIEW = { longitude: 81.8, latitude: 22.8, height: 4_950_000 };
+const MAHARASHTRA_VIEW = { longitude: 76.2, latitude: 19.3, height: 1_150_000 };
+const GLOBAL_VIEW = { longitude: 80, latitude: 20, height: 14_000_000 };
 const STATE_BOUNDARY_MAX_HEIGHT = 7_000_000;
 
 type Location = { code: string; name: string; region: string };
@@ -196,11 +201,6 @@ function formatCoordinate(value: number, positive: string, negative: string) {
   return `${Math.abs(value).toFixed(2)}°${value < 0 ? negative : positive}`;
 }
 
-const imageryProvider = new Cesium.UrlTemplateImageryProvider({
-  url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-  credit: "Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
-});
-
 const rainfallColorStops = [
   { value: 0, color: [0, 0, 0, 0] },
   { value: 1, color: [40, 124, 255, 190] },
@@ -347,7 +347,7 @@ const initialCameraDestination = Cesium.Cartesian3.fromDegrees(
 );
 const initialCameraOrientation = {
   heading: 0,
-  pitch: Cesium.Math.toRadians(-78),
+  pitch: Cesium.Math.toRadians(-88),
   roll: 0,
 };
 
@@ -376,7 +376,7 @@ const ClimateGlobe = memo(function ClimateGlobe({
         maximumRenderTimeChange={Number.POSITIVE_INFINITY}
         useBrowserRecommendedResolution
       >
-        <ImageryLayer imageryProvider={imageryProvider} />
+        <ImageryLayer imageryProvider={ORIGINAL_EARTH_IMAGERY_PROVIDER} />
         <CameraFlyTo
           destination={initialCameraDestination}
           orientation={initialCameraOrientation}
@@ -391,6 +391,8 @@ const ClimateGlobe = memo(function ClimateGlobe({
 export default function App() {
   const viewerRef = useRef<ViewerHandle | null>(null);
   const boundarySourceRef = useRef<Cesium.GeoJsonDataSource | null>(null);
+  const stateLabelsSourceRef = useRef<Cesium.CustomDataSource | null>(null);
+  const cityLabelsSourceRef = useRef<Cesium.CustomDataSource | null>(null);
   const rainfallLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const rainfallSourceRef = useRef<RainfallSource>("none");
   const temperatureSourceRef = useRef<TemperatureSource>("none");
@@ -399,6 +401,8 @@ export default function App() {
   const rainfallDateRef = useRef("");
   const rainfallCellControllerRef = useRef<AbortController | null>(null);
   const boundaryPreferenceRef = useRef(true);
+  const stateLabelsPreferenceRef = useRef(true);
+  const cityLabelsPreferenceRef = useRef(true);
   const searchControllerRef = useRef<AbortController | null>(null);
   const [viewerReady, setViewerReady] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<Location>({
@@ -406,9 +410,11 @@ export default function App() {
     name: "India",
     region: "Indian subcontinent",
   });
+  const selectedLocationRef = useRef(selectedLocation);
   const [boundaryStatus, setBoundaryStatus] = useState("Loading boundaries");
   const [boundariesVisible, setBoundariesVisible] = useState(true);
-  const [imageryVisible, setImageryVisible] = useState(true);
+  const [stateLabelsVisible, setStateLabelsVisible] = useState(true);
+  const [cityLabelsVisible, setCityLabelsVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("historical");
@@ -497,7 +503,7 @@ export default function App() {
       ),
       orientation: {
         heading: 0,
-        pitch: Cesium.Math.toRadians(-78),
+        pitch: Cesium.Math.toRadians(-88),
         roll: 0,
       },
       duration: 1.8,
@@ -541,7 +547,7 @@ export default function App() {
     if (state) {
       void viewer.flyTo(state, {
         duration: 1.8,
-        offset: new Cesium.HeadingPitchRange(0, -0.75, 850_000),
+        offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-75), 1_150_000),
       });
       return;
     }
@@ -554,7 +560,7 @@ export default function App() {
       ),
       orientation: {
         heading: 0,
-        pitch: Cesium.Math.toRadians(-65),
+        pitch: Cesium.Math.toRadians(-75),
         roll: 0,
       },
       duration: 1.8,
@@ -810,6 +816,8 @@ export default function App() {
     }
   }, [placeQuery]);
 
+
+
   useEffect(() => {
     const viewer = viewerRef.current?.cesiumElement;
     if (!viewerReady || !viewer) return;
@@ -821,7 +829,7 @@ export default function App() {
     let removeCameraListener: (() => void) | undefined;
     let coordinatePicker: Cesium.ScreenSpaceEventHandler | undefined;
 
-    const loadBoundaries = async () => {
+    const loadBoundariesAndLabels = async () => {
       try {
         const source = await loadIndiaBoundaries();
         if (!active) return;
@@ -829,28 +837,47 @@ export default function App() {
           await viewer.dataSources.add(source);
         }
         boundarySourceRef.current = source;
-        source.entities.values.forEach((entity) => {
-          if (!entity.polygon) return;
-          entity.polygon.material = new Cesium.ColorMaterialProperty(
-            Cesium.Color.fromCssColorString("#b6dce5").withAlpha(0.015),
-          );
-          entity.polygon.outline = new Cesium.ConstantProperty(true);
-          entity.polygon.outlineColor = new Cesium.ConstantProperty(
-            Cesium.Color.fromCssColorString("#b6dce5").withAlpha(0.5),
-          );
-          entity.polygon.outlineWidth = new Cesium.ConstantProperty(1);
-        });
+        styleBoundaryEntities(source, selectedLocationRef.current.code);
+
+        const { stateLabelsSource, cityLabelsSource } = buildGeographicLabelsDataSources();
+        if (!active) return;
+        if (!viewer.dataSources.contains(stateLabelsSource)) {
+          await viewer.dataSources.add(stateLabelsSource);
+        }
+        if (!viewer.dataSources.contains(cityLabelsSource)) {
+          await viewer.dataSources.add(cityLabelsSource);
+        }
+        stateLabelsSourceRef.current = stateLabelsSource;
+        cityLabelsSourceRef.current = cityLabelsSource;
+
+        stateLabelsSource.show = stateLabelsPreferenceRef.current;
+        cityLabelsSource.show = cityLabelsPreferenceRef.current;
 
         const onSelectionChanged = (selected: Cesium.Entity | undefined) => {
           if (!selected?.properties) return;
           const properties = selected.properties.getValue(Cesium.JulianDate.now());
+          const kind = properties?.kind;
+
+          if (kind === "city-label") {
+            const cityName = properties?.cityName ?? selected.name;
+            const stateName = properties?.state_name ?? "";
+            setSelectedLocation({
+              code: `CITY-${String(cityName).toUpperCase().replace(/\s+/g, "_")}`,
+              name: String(cityName),
+              region: `${stateName}, India`,
+            });
+            setInfoOpen(true);
+            return;
+          }
+
           const code = properties?.iso_code ?? properties?.STATE_CODE ?? selected.id;
           const name =
             properties?.state_name ??
             properties?.STATE_NAME ??
             properties?.ST_NM ??
+            selected.name ??
             "Selected state";
-          const region = properties?.REGION ?? "India";
+          const region = properties?.REGION ?? properties?.region ?? "India";
           if (typeof code === "string") {
             setSelectedLocation({
               code,
@@ -863,6 +890,7 @@ export default function App() {
         viewer.selectedEntityChanged.addEventListener(onSelectionChanged);
         removeSelectionListener = () =>
           viewer.selectedEntityChanged.removeEventListener(onSelectionChanged);
+
         const updateBoundaryScale = () => {
           source.show =
             boundaryPreferenceRef.current &&
@@ -927,31 +955,36 @@ export default function App() {
 
         updateBoundaryScale();
         viewer.scene.requestRender();
-        setBoundaryStatus("State boundaries ready");
+        setBoundaryStatus("State boundaries and labels ready");
       } catch (error) {
-        console.error("Failed to load India state boundaries:", error);
+        console.error("Failed to load India state boundaries and labels:", error);
         if (active) setBoundaryStatus("Boundary data unavailable");
       }
     };
 
-    void loadBoundaries();
+    void loadBoundariesAndLabels();
     return () => {
       active = false;
       removeSelectionListener?.();
       removeCameraListener?.();
       coordinatePicker?.destroy();
       removeCursorZoom();
+      if (
+        stateLabelsSourceRef.current &&
+        viewer.dataSources.contains(stateLabelsSourceRef.current)
+      ) {
+        viewer.dataSources.remove(stateLabelsSourceRef.current, true);
+        stateLabelsSourceRef.current = null;
+      }
+      if (
+        cityLabelsSourceRef.current &&
+        viewer.dataSources.contains(cityLabelsSourceRef.current)
+      ) {
+        viewer.dataSources.remove(cityLabelsSourceRef.current, true);
+        cityLabelsSourceRef.current = null;
+      }
     };
   }, [inspectCoordinates, viewerReady]);
-
-  useEffect(() => {
-    const viewer = viewerRef.current?.cesiumElement;
-    const layer = viewer?.imageryLayers.get(0);
-    if (viewer && layer) {
-      layer.show = imageryVisible;
-      viewer.scene.requestRender();
-    }
-  }, [imageryVisible, viewerReady]);
 
   useEffect(() => {
     boundaryPreferenceRef.current = boundariesVisible;
@@ -965,25 +998,29 @@ export default function App() {
   }, [boundariesVisible, boundaryStatus]);
 
   useEffect(() => {
+    stateLabelsPreferenceRef.current = stateLabelsVisible;
+    if (stateLabelsSourceRef.current) {
+      stateLabelsSourceRef.current.show = stateLabelsVisible;
+      viewerRef.current?.cesiumElement?.scene.requestRender();
+    }
+  }, [stateLabelsVisible]);
+
+  useEffect(() => {
+    cityLabelsPreferenceRef.current = cityLabelsVisible;
+    if (cityLabelsSourceRef.current) {
+      cityLabelsSourceRef.current.show = cityLabelsVisible;
+      viewerRef.current?.cesiumElement?.scene.requestRender();
+    }
+  }, [cityLabelsVisible]);
+
+  useEffect(() => {
+    selectedLocationRef.current = selectedLocation;
     const source = boundarySourceRef.current;
     if (!source) return;
-    source.entities.values.forEach((entity) => {
-      if (!entity.polygon) return;
-      const properties = entity.properties?.getValue(Cesium.JulianDate.now());
-      const code = properties?.iso_code ?? properties?.STATE_CODE ?? entity.id;
-      const selected = code === selectedLocation.code;
-      entity.polygon.material = new Cesium.ColorMaterialProperty(
-        (selected ? Cesium.Color.fromCssColorString("#65e4ef") : Cesium.Color.fromCssColorString("#b6dce5"))
-          .withAlpha(selected ? 0.18 : 0.015),
-      );
-      entity.polygon.outlineColor = new Cesium.ConstantProperty(
-        (selected ? Cesium.Color.fromCssColorString("#8ff2f6") : Cesium.Color.fromCssColorString("#b6dce5"))
-          .withAlpha(selected ? 0.95 : 0.5),
-      );
-      entity.polygon.outlineWidth = new Cesium.ConstantProperty(selected ? 2 : 1);
-    });
+    styleBoundaryEntities(source, selectedLocation.code);
     viewerRef.current?.cesiumElement?.scene.requestRender();
   }, [selectedLocation, boundaryStatus]);
+
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1545,18 +1582,44 @@ export default function App() {
       {settingsOpen && (
         <section className="settings-popover" aria-label="Map layers">
           <div className="popover-heading">
-            <strong>Map layers</strong>
-            <button type="button" className="icon-button" aria-label="Close layers" onClick={() => setSettingsOpen(false)}><X size={15} /></button>
+            <strong>Map layers & detail</strong>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Close layers"
+              onClick={() => setSettingsOpen(false)}
+            >
+              <X size={15} />
+            </button>
           </div>
+
+          <p className="layer-group-label">Geographical overlays</p>
           <label className="layer-item">
-            <input type="checkbox" checked={imageryVisible} onChange={(event) => setImageryVisible(event.target.checked)} />
-            <span className="layer-swatch satellite-swatch" />
-            <span>Satellite imagery</span>
+            <input
+              type="checkbox"
+              checked={boundariesVisible}
+              onChange={(event) => setBoundariesVisible(event.target.checked)}
+            />
+            <span className="layer-swatch boundary-swatch" />
+            <span>State & UT boundaries (real borders)</span>
           </label>
           <label className="layer-item">
-            <input type="checkbox" checked={boundariesVisible} onChange={(event) => setBoundariesVisible(event.target.checked)} />
-            <span className="layer-swatch boundary-swatch" />
-            <span>India state boundaries</span>
+            <input
+              type="checkbox"
+              checked={stateLabelsVisible}
+              onChange={(event) => setStateLabelsVisible(event.target.checked)}
+            />
+            <span className="layer-swatch state-label-swatch" />
+            <span>State & UT names</span>
+          </label>
+          <label className="layer-item">
+            <input
+              type="checkbox"
+              checked={cityLabelsVisible}
+              onChange={(event) => setCityLabelsVisible(event.target.checked)}
+            />
+            <span className="layer-swatch city-label-swatch" />
+            <span>Cities & towns (zoom-adaptive)</span>
           </label>
           {viewMode === "forecast" ? (
             <>
@@ -1728,9 +1791,9 @@ export default function App() {
           )}
             </>
           )}
-          <p className="source-note">
-            Satellite basemap: Esri World Imagery. Provider acquisition timestamp is not supplied.
-          </p>
+          <div className="geo-attribution">
+            Globe: Esri World Imagery (realistic 3D Earth) · Boundaries: geoBoundaries IND-ADM1 (CC BY 4.0) · Climate: IMD & NASA GIBS.
+          </div>
         </section>
       )}
 

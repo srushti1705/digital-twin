@@ -675,8 +675,74 @@ button {
 }
 
 .boundary-swatch {
-  border: 1px solid #e8eee8;
+  border: 1px solid #38bdf8;
+  background: rgba(56, 189, 248, 0.2);
 }
+
+.state-label-swatch {
+  background: #f8fafc;
+  box-shadow: 0 0 0 1px #020617;
+}
+
+.city-label-swatch {
+  background: #38bdf8;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #020617;
+}
+
+.basemap-options {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.basemap-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.basemap-option:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.basemap-option.selected {
+  background: rgba(56, 189, 248, 0.16);
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.5);
+  font-weight: 500;
+}
+
+.geo-attribution {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.4;
+}
+
+.geo-attribution a {
+  color: rgba(125, 211, 252, 0.8);
+  text-decoration: none;
+}
+
+.geo-attribution a:hover {
+  text-decoration: underline;
+}
+
 
 .timeline-control {
   position: absolute;
