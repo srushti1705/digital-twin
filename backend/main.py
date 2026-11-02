@@ -1,4 +1,6 @@
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -16,14 +18,25 @@ app.include_router(rainfall_router)
 app.include_router(temperature_router)
 app.include_router(prediction_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+configured_origins = os.environ.get("FRONTEND_ORIGINS")
+allowed_origins = (
+    [
+        origin.strip().rstrip("/")
+        for origin in configured_origins.split(",")
+        if origin.strip()
+    ]
+    if configured_origins is not None
+    else [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
-    ],
+    ]
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

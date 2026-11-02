@@ -25,8 +25,18 @@ except ImportError:
     import temperature_api
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MODEL_DIRECTORY = PROJECT_ROOT / "models" / "climate_forecasts"
-METRICS_DIRECTORY = PROJECT_ROOT / "outputs" / "climate_forecasts"
+MODEL_DIRECTORY = Path(
+    os.environ.get(
+        "CLIMATE_MODEL_DIR",
+        str(PROJECT_ROOT / "models" / "climate_forecasts"),
+    )
+).expanduser().resolve()
+METRICS_DIRECTORY = Path(
+    os.environ.get(
+        "CLIMATE_METRICS_DIR",
+        str(PROJECT_ROOT / "outputs" / "climate_forecasts"),
+    )
+).expanduser().resolve()
 YEAR_PATTERN = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 ClimateVariable = Literal["rainfall", "tmax", "tmin"]
 

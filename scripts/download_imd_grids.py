@@ -20,7 +20,7 @@ PRODUCTS = {
         "page": "https://imdpune.gov.in/cmpg/Griddata/Rainfall_25_Bin.html",
         "form_action": "rainfall.php",
         "field": "rain",
-        "directory": Path("data/raw/rainfall"),
+        "directory": Path("rainfall"),
         "filename": "ind{year}_rfp25.grd",
         "cells_per_day": 129 * 135,
     },
@@ -28,7 +28,7 @@ PRODUCTS = {
         "page": "https://imdpune.gov.in/cmpg/Griddata/Max_1_Bin.html",
         "form_action": "maxtemp.php",
         "field": "maxtemp",
-        "directory": Path("data/raw/max_temp"),
+        "directory": Path("max_temp"),
         "filename": "maxtemp_{year}.grd",
         "cells_per_day": 31 * 31,
     },
@@ -36,7 +36,7 @@ PRODUCTS = {
         "page": "https://imdpune.gov.in/cmpg/Griddata/Min_1_Bin.html",
         "form_action": "mintemp.php",
         "field": "mintemp",
-        "directory": Path("data/raw/min_temp"),
+        "directory": Path("min_temp"),
         "filename": "mintemp_{year}.grd",
         "cells_per_day": 31 * 31,
     },
@@ -102,7 +102,12 @@ def _expected_bytes(year: int, cells_per_day: int) -> int:
     return days * cells_per_day * 4
 
 
-def download_product(product_name: str, year: int, overwrite: bool = False) -> Path:
+def download_product(
+    product_name: str,
+    year: int,
+    overwrite: bool = False,
+    data_root: Path | None = None,
+) -> Path:
     product = PRODUCTS[product_name]
     endpoint, available_years = _available_years(product)
     if year not in available_years:
@@ -111,9 +116,8 @@ def download_product(product_name: str, year: int, overwrite: bool = False) -> P
             f"listed years are {min(available_years)}–{max(available_years)}."
         )
 
-    destination = PROJECT_ROOT / str(product["directory"]) / str(product["filename"]).format(
-        year=year
-    )
+    root = data_root or PROJECT_ROOT / "data" / "raw"
+    destination = root / str(product["directory"]) / str(product["filename"]).format(year=year)
     destination.parent.mkdir(parents=True, exist_ok=True)
     expected_size = _expected_bytes(year, int(product["cells_per_day"]))
     if destination.exists():
@@ -173,6 +177,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--years", nargs="+", type=int, required=True)
     parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "raw",
+        help="Root directory for rainfall/, max_temp/, and min_temp/ files.",
+    )
+    parser.add_argument(
         "--variables",
         nargs="+",
         choices=tuple(PRODUCTS),
@@ -184,7 +194,12 @@ def main() -> None:
         if not re.fullmatch(r"(?:19|20)\d{2}", str(year)):
             parser.error(f"Invalid year: {year}")
         for variable in arguments.variables:
-            download_product(variable, year, overwrite=arguments.overwrite)
+            download_product(
+                variable,
+                year,
+                overwrite=arguments.overwrite,
+                data_root=arguments.data_root,
+            )
 
 
 if __name__ == "__main__":

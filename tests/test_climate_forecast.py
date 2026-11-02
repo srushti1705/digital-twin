@@ -1,9 +1,11 @@
+import io
 from datetime import date
 
 import numpy as np
 import pytest
 
 from backend import climate_forecast, prediction_api
+from scripts import download_imd_grids
 from scripts.download_imd_grids import _FormParser, _expected_bytes
 
 
@@ -45,6 +47,31 @@ def test_xgboost_selection_requires_material_validation_gain_without_mae_regress
     assert not climate_forecast._select_xgboost(
         {"RMSE": 9.0, "MAE": 5.1}, persistence
     )
+
+
+def test_imd_downloader_writes_to_configured_data_root(tmp_path, monkeypatch):
+    expected_size = _expected_bytes(2025, 31 * 31)
+    monkeypatch.setattr(
+        download_imd_grids,
+        "_available_years",
+        lambda _product: ("https://imd.invalid/download", {2025}),
+    )
+
+    class BinaryResponse(io.BytesIO):
+        headers = {"Content-Type": "application/octet-stream"}
+
+    monkeypatch.setattr(
+        download_imd_grids.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: BinaryResponse(b"\0" * expected_size),
+    )
+
+    destination = download_imd_grids.download_product(
+        "tmax", 2025, data_root=tmp_path / "persistent" / "imd"
+    )
+
+    assert destination == tmp_path / "persistent" / "imd" / "max_temp" / "maxtemp_2025.grd"
+    assert destination.stat().st_size == expected_size
 
 
 def test_prediction_api_returns_actual_grid_values_and_nearest_cell(monkeypatch):

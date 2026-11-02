@@ -142,3 +142,7 @@ See `data/DATA_SOURCES.md`, `backend/RAINFALL_API.md`, and
 `backend/FORECAST_MODEL_REPORT.md` for source details, API routes, and measured
 model results. Numerical NASA IMERG requires server-side Earthdata authentication;
 georeferenced cloud imagery and structured cyclone tracks are not integrated.
+
+See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the prepared Render configuration,
+external dataset/model storage strategy, environment variables, and deployment
+limitations. No hosting resources are created by these instructions.
