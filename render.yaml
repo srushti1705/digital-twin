@@ -9,7 +9,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.11
+        value: 3.13.3
       - key: CLIMATE_DATA_ROOT
         value: /tmp/climate-data
       - key: CLIMATE_MODEL_DIR
