@@ -45,14 +45,21 @@ if ! python scripts/download_imd_grids.py --years "$@" --data-root "$CLIMATE_DAT
 fi
 
 if ! python -m scripts.climate_model_bundle verify; then
-    if [ -z "${CLIMATE_MODEL_BUNDLE_URL:-}" ]; then
+    if [ -f "$PROJECT_ROOT/data/models/climate-models-2025.zip" ]; then
+        echo "Installing pre-packaged forecast model bundle from repository."
+        if ! python -m scripts.climate_model_bundle install --url "$PROJECT_ROOT/data/models/climate-models-2025.zip"; then
+            echo "Startup error: repository model bundle could not be installed." >&2
+            exit 1
+        fi
+    elif [ -n "${CLIMATE_MODEL_BUNDLE_URL:-}" ]; then
+        echo "Installing the prepared forecast model bundle from CLIMATE_MODEL_BUNDLE_URL."
+        if ! python -m scripts.climate_model_bundle install --url "$CLIMATE_MODEL_BUNDLE_URL"; then
+            echo "Startup error: the forecast model bundle could not be downloaded or validated." >&2
+            exit 1
+        fi
+    else
         echo "Startup error: forecast model artifacts are missing or invalid, and CLIMATE_MODEL_BUNDLE_URL is not set." >&2
         echo "Train the models locally, package them with python -m scripts.climate_model_bundle, and provide the public bundle URL." >&2
-        exit 1
-    fi
-    echo "Installing the prepared forecast model bundle."
-    if ! python -m scripts.climate_model_bundle install --url "$CLIMATE_MODEL_BUNDLE_URL"; then
-        echo "Startup error: the forecast model bundle could not be downloaded or validated." >&2
         exit 1
     fi
 fi

@@ -111,6 +111,7 @@ data/external/*
 *.tar
 *.gz
 *.zip
+!data/models/climate-models-2025.zip
 *.7z
 
 # --- Trained Machine Learning Models ---
