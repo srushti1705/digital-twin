@@ -127,6 +127,19 @@ def validate_installed_models() -> None:
 
 
 def _download_bundle(url: str) -> bytes:
+    if url.startswith("file://") or Path(url).is_file():
+        file_path = (
+            Path(urllib.request.url2pathname(urllib.parse.urlparse(url).path))
+            if url.startswith("file://")
+            else Path(url)
+        )
+        if not file_path.is_file():
+            raise FileNotFoundError(f"Local climate model bundle not found: {file_path}")
+        payload = file_path.read_bytes()
+        if len(payload) > MAX_BUNDLE_BYTES:
+            raise ValueError(f"Climate model bundle exceeds {MAX_BUNDLE_BYTES} bytes.")
+        return payload
+
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
