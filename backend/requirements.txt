@@ -10,6 +10,7 @@ h11==0.16.0
 httptools==0.9.0
 idna==3.20
 joblib==1.6.0
+matplotlib==3.11.2
 narwhals==2.27.1
 netCDF4==1.7.4
 numpy==2.5.4
